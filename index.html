@@ -13,6 +13,7 @@
       <button class="aba ativa" data-aba="painel">Painel</button>
       <button class="aba" data-aba="lancamentos">Contas a pagar / receber</button>
       <button class="aba" data-aba="contas">Contas e saldos</button>
+      <button class="aba" data-aba="extrato">Extrato</button>
       <button class="aba" data-aba="dados">Dados</button>
     </nav>
   </header>
@@ -118,6 +119,41 @@
         </div>
       </form>
       <ul id="listaContas" class="lista contas"></ul>
+
+      <div class="painel-bloco conectar">
+        <h2>Conectar banco (importar extrato)</h2>
+        <p>Traga as movimentações e o saldo do seu banco. No app ou internet banking, exporte o extrato em
+          <strong>OFX</strong> (às vezes chamado de “Money”, “Quicken” ou “Open Financial Exchange”) ou em <strong>CSV/planilha</strong>
+          e envie o arquivo aqui. Funciona com Nubank, Itaú, Bradesco, Banco do Brasil, Caixa, Santander, Inter, C6 e outros.</p>
+        <ul class="dicas">
+          <li>As movimentações são categorizadas automaticamente (mercado, transporte, contas da casa…).</li>
+          <li>Contas a pagar/receber cadastradas que aparecerem no extrato recebem baixa sozinhas.</li>
+          <li>Pode importar o mesmo período de novo: movimentações repetidas são ignoradas.</li>
+          <li>O arquivo é lido só no seu navegador; nada é enviado para servidor nenhum.</li>
+        </ul>
+        <div class="acoes">
+          <label class="inline">Conta <select id="contaImport"></select></label>
+          <label class="botao">Escolher arquivo do extrato
+            <input type="file" id="arquivoExtrato" accept=".ofx,.qfx,.csv,.txt,text/csv,application/x-ofx" hidden>
+          </label>
+        </div>
+        <p id="msgImport" class="msg" aria-live="polite"></p>
+      </div>
+    </section>
+
+    <!-- EXTRATO -->
+    <section id="extrato" class="secao">
+      <div class="filtros">
+        <select id="filtroExtratoConta"></select>
+        <input type="month" id="filtroExtratoMes" aria-label="Mês">
+      </div>
+      <p id="resumoExtrato" class="resumo"></p>
+      <div class="tabela-wrap">
+        <table>
+          <thead><tr><th>Data</th><th>Descrição</th><th>Categoria</th><th>Conta</th><th class="num">Valor</th><th></th></tr></thead>
+          <tbody id="tabelaExtrato"></tbody>
+        </table>
+      </div>
     </section>
 
     <!-- DADOS -->
@@ -135,6 +171,7 @@
     </section>
   </main>
 
+  <script src="js/extrato.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

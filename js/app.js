@@ -10,14 +10,20 @@
   let estado = carregar();
   let mesVisto = hoje().slice(0, 7); // "AAAA-MM"
 
-  function vazio() { return { contas: [], lancamentos: [] }; }
+  function vazio() { return { contas: [], lancamentos: [], movimentacoes: [] }; }
+
+  function valido(dados) {
+    if (!dados || !Array.isArray(dados.contas) || !Array.isArray(dados.lancamentos)) return null;
+    if (!Array.isArray(dados.movimentacoes)) dados.movimentacoes = [];
+    return dados;
+  }
 
   function carregar() {
     try {
       const bruto = localStorage.getItem(CHAVE);
       if (bruto) {
-        const dados = JSON.parse(bruto);
-        if (Array.isArray(dados.contas) && Array.isArray(dados.lancamentos)) return dados;
+        const dados = valido(JSON.parse(bruto));
+        if (dados) return dados;
       }
     } catch (e) { /* armazenamento indisponível ou corrompido */ }
     return vazio();
@@ -82,28 +88,105 @@
   function marcarPago(lancId) {
     const l = estado.lancamentos.find(x => x.id === lancId);
     if (!l || l.pago) return;
+    darBaixa(l, true, hoje());
+    salvar();
+  }
+
+  // Marca como pago; ajustarSaldo=false quando o saldo já veio do extrato do banco.
+  function darBaixa(l, ajustarSaldo, data) {
     l.pago = true;
-    l.dataPagamento = hoje();
+    l.dataPagamento = data;
+    l.conciliado = !ajustarSaldo;
     const conta = estado.contas.find(c => c.id === l.contaId);
-    if (conta) conta.saldo = arred(conta.saldo + sinal(l) * l.valor);
+    if (conta && ajustarSaldo) conta.saldo = arred(conta.saldo + sinal(l) * l.valor);
     if (l.recorrente && !l.proximaGerada) {
       l.proximaGerada = true;
       estado.lancamentos.push({
         ...l, id: id(), vencimento: proximaData(l.vencimento, l.diaOriginal),
-        pago: false, dataPagamento: null, proximaGerada: false
+        pago: false, dataPagamento: null, proximaGerada: false, conciliado: false, movId: null
       });
     }
-    salvar();
   }
 
   function desfazerPago(lancId) {
     const l = estado.lancamentos.find(x => x.id === lancId);
     if (!l || !l.pago) return;
     const conta = estado.contas.find(c => c.id === l.contaId);
-    if (conta) conta.saldo = arred(conta.saldo - sinal(l) * l.valor);
+    if (conta && !l.conciliado) conta.saldo = arred(conta.saldo - sinal(l) * l.valor);
+    if (l.movId) {
+      const mov = estado.movimentacoes.find(m => m.id === l.movId);
+      if (mov) mov.lancId = null;
+    }
     l.pago = false;
     l.dataPagamento = null;
+    l.conciliado = false;
+    l.movId = null;
     salvar();
+  }
+
+  // ---------- Importação de extrato ----------
+  function diasEntre(a, b) { return Math.abs((new Date(a) - new Date(b)) / 86400000); }
+
+  async function importarExtrato(contaId, arquivo) {
+    const conta = estado.contas.find(c => c.id === contaId);
+    if (!conta) throw new Error('Escolha a conta do banco antes de importar.');
+    const r = await window.Extrato.ler(arquivo);
+
+    const chave = t => t.fitid ? 'f:' + t.fitid : `d:${t.data}|${t.valor}|${t.descricao}`;
+    const existentes = new Set(estado.movimentacoes.filter(m => m.contaId === contaId).map(chave));
+    const novas = [];
+    for (const t of r.transacoes) {
+      const k = chave(t);
+      if (existentes.has(k)) continue;
+      existentes.add(k);
+      novas.push({ id: id(), contaId, ...t, categoria: window.Extrato.categorizar(t.descricao), lancId: null });
+    }
+
+    // Conciliação: dá baixa nas contas a pagar/receber que aparecem no extrato
+    let conciliadas = 0;
+    for (const m of novas) {
+      const tipo = m.valor < 0 ? 'pagar' : 'receber';
+      const l = estado.lancamentos
+        .filter(l => !l.pago && l.tipo === tipo && (!l.contaId || l.contaId === contaId) &&
+          Math.abs(l.valor - Math.abs(m.valor)) < 0.01 && diasEntre(l.vencimento, m.data) <= 7)
+        .sort((x, y) => diasEntre(x.vencimento, m.data) - diasEntre(y.vencimento, m.data))[0];
+      if (l) {
+        l.contaId = contaId;
+        darBaixa(l, false, m.data);
+        l.movId = m.id;
+        m.lancId = l.id;
+        m.categoria = l.categoria || m.categoria;
+        conciliadas++;
+      }
+    }
+
+    estado.movimentacoes.push(...novas);
+
+    // Atualização do saldo
+    let msgSaldo = '';
+    if (r.saldo !== null) {
+      if (Math.abs(r.saldo - conta.saldo) >= 0.01 &&
+          confirm(`O banco informou saldo de ${brl.format(r.saldo)}${r.dataSaldo ? ' em ' + dataBR(r.dataSaldo) : ''}.\n` +
+                  `O saldo cadastrado de "${conta.nome}" é ${brl.format(conta.saldo)}.\n\nAtualizar para o saldo do banco?`)) {
+        conta.saldo = r.saldo;
+        msgSaldo = ` Saldo atualizado para ${brl.format(r.saldo)}.`;
+      }
+    } else if (novas.length) {
+      const total = arred(novas.reduce((s, m) => s + m.valor, 0));
+      if (confirm(`${novas.length === 1 ? "A movimentação nova soma" : `As ${novas.length} movimentações novas somam`} ${brl.format(total)}.\n\n` +
+                  `Aplicar esse valor ao saldo de "${conta.nome}" (${brl.format(conta.saldo)} → ${brl.format(arred(conta.saldo + total))})?\n\n` +
+                  'Responda "Cancelar" se o saldo cadastrado já considera essas movimentações.')) {
+        conta.saldo = arred(conta.saldo + total);
+        msgSaldo = ` Saldo atualizado para ${brl.format(conta.saldo)}.`;
+      }
+    }
+    conta.ultimaImportacao = hoje();
+    salvar();
+
+    const ignoradas = r.transacoes.length - novas.length;
+    return `${r.formato}: ${novas.length} movimentação(ões) importada(s)` +
+      (ignoradas ? `, ${ignoradas} já existia(m)` : '') +
+      (conciliadas ? `, ${conciliadas} conta(s) a pagar/receber baixada(s) automaticamente` : '') + '.' + msgSaldo;
   }
 
   function arred(v) { return Math.round(v * 100) / 100; }
@@ -114,6 +197,7 @@
     renderLancamentos();
     renderContas();
     renderSelects();
+    renderExtrato();
   }
 
   function renderPainel() {
@@ -169,6 +253,12 @@
       const c = l.categoria || 'Sem categoria';
       porCat[c] = (porCat[c] || 0) + l.valor;
     }
+    // + gastos vindos do extrato do banco (os já conciliados com uma conta a pagar não contam de novo)
+    for (const m of estado.movimentacoes) {
+      if (m.valor >= 0 || m.lancId || m.data < inicio || m.data > fim) continue;
+      const c = m.categoria || 'Outros';
+      porCat[c] = (porCat[c] || 0) - m.valor;
+    }
     const cats = Object.entries(porCat).sort((x, y) => y[1] - x[1]);
     const max = cats.length ? cats[0][1] : 0;
     document.getElementById('graficoCategorias').innerHTML = cats.length ? cats.map(([c, v]) => `
@@ -180,7 +270,7 @@
     // Saldo por conta
     const ulSaldos = document.getElementById('listaSaldos');
     ulSaldos.innerHTML = estado.contas.length ? estado.contas.map(c => `
-      <li><div>${esc(c.nome)}<small>${esc(c.tipo)}</small></div>
+      <li><div>${esc(c.nome)}<small>${esc(c.tipo)}${c.ultimaImportacao ? ' · extrato de ' + dataBR(c.ultimaImportacao) : ''}</small></div>
       <span class="valor ${c.saldo < 0 ? 'neg' : ''}">${brl.format(c.saldo)}</span></li>`).join('')
       : '<li class="vazio">Cadastre suas contas na aba “Contas e saldos”.</li>';
   }
@@ -192,7 +282,7 @@
   }
 
   function statusTexto(l) {
-    if (l.pago) return l.tipo === 'receber' ? 'Recebido' : 'Pago';
+    if (l.pago) return (l.tipo === 'receber' ? 'Recebido' : 'Pago') + (l.conciliado ? ' (extrato)' : '');
     if (l.vencimento < hoje()) return 'Vencida';
     if (l.vencimento === hoje()) return 'Vence hoje';
     return 'Pendente';
@@ -233,9 +323,10 @@
     const ul = document.getElementById('listaContas');
     ul.innerHTML = estado.contas.length ? estado.contas.map(c => `
       <li>
-        <div><strong>${esc(c.nome)}</strong><small>${esc(c.tipo)}</small></div>
+        <div><strong>${esc(c.nome)}</strong><small>${esc(c.tipo)}${c.ultimaImportacao ? ' · último extrato importado em ' + dataBR(c.ultimaImportacao) : ''}</small></div>
         <div class="acoes">
           <span class="valor ${c.saldo < 0 ? 'neg' : ''}">${brl.format(c.saldo)}</span>
+          <button class="mini" data-importar="${c.id}">Importar extrato</button>
           <button class="mini secundario" data-editar-conta="${c.id}">Editar</button>
           <button class="mini perigo" data-excluir-conta="${c.id}">Excluir</button>
         </div>
@@ -250,8 +341,37 @@
       estado.contas.map(c => `<option value="${c.id}">${esc(c.nome)}</option>`).join('');
     sel.value = estado.contas.some(c => c.id === atual) ? atual : (estado.contas[0]?.id || '');
 
-    const cats = [...new Set(estado.lancamentos.map(l => l.categoria).filter(Boolean))].sort();
+    const cats = [...new Set([...estado.lancamentos, ...estado.movimentacoes].map(l => l.categoria).filter(Boolean))].sort();
     document.getElementById('categorias').innerHTML = cats.map(c => `<option value="${esc(c)}">`).join('');
+
+    for (const [selId, primeira] of [['contaImport', ''], ['filtroExtratoConta', '<option value="">Todas as contas</option>']]) {
+      const s = document.getElementById(selId);
+      const v = s.value;
+      s.innerHTML = primeira + estado.contas.map(c => `<option value="${c.id}">${esc(c.nome)}</option>`).join('');
+      if ([...s.options].some(o => o.value === v)) s.value = v;
+    }
+  }
+
+  function renderExtrato() {
+    const contaId = document.getElementById('filtroExtratoConta').value;
+    const mes = document.getElementById('filtroExtratoMes').value;
+    const lista = estado.movimentacoes
+      .filter(m => (!contaId || m.contaId === contaId) && (!mes || m.data.startsWith(mes)))
+      .sort((a, b) => b.data.localeCompare(a.data));
+    const entradas = lista.filter(m => m.valor > 0).reduce((s, m) => s + m.valor, 0);
+    const saidas = lista.filter(m => m.valor < 0).reduce((s, m) => s - m.valor, 0);
+    document.getElementById('resumoExtrato').innerHTML = lista.length
+      ? `Entradas <strong class="pos">${brl.format(entradas)}</strong> · Saídas <strong class="neg">${brl.format(saidas)}</strong> · ${lista.length} movimentação(ões)`
+      : '';
+    document.getElementById('tabelaExtrato').innerHTML = lista.length ? lista.map(m => `<tr>
+        <td>${dataBR(m.data)}</td>
+        <td>${esc(m.descricao)}${m.lancId ? ' <small title="Conciliado com uma conta a pagar/receber">✔</small>' : ''}</td>
+        <td><input class="cat-mov" data-mov="${m.id}" value="${esc(m.categoria)}" list="categorias" aria-label="Categoria"></td>
+        <td>${esc(nomeConta(m.contaId))}</td>
+        <td class="num ${m.valor > 0 ? 'pos' : 'neg'}">${brl.format(m.valor)}</td>
+        <td><button class="mini perigo" data-excluir-mov="${m.id}">Excluir</button></td>
+      </tr>`).join('')
+      : '<tr><td colspan="6" class="vazio">Nenhuma movimentação. Importe o extrato do seu banco na aba “Contas e saldos”.</td></tr>';
   }
 
   // ---------- Formulários ----------
@@ -346,6 +466,23 @@
       return;
     }
     if (d.desfazer) { desfazerPago(d.desfazer); return; }
+    if (d.importar) {
+      document.getElementById('contaImport').value = d.importar;
+      document.getElementById('arquivoExtrato').click();
+      return;
+    }
+    if (d.excluirMov) {
+      const m = estado.movimentacoes.find(x => x.id === d.excluirMov);
+      if (m && confirm(`Excluir a movimentação "${m.descricao}"? (O saldo da conta não será alterado.)`)) {
+        if (m.lancId) {
+          const l = estado.lancamentos.find(x => x.id === m.lancId);
+          if (l) l.movId = null;
+        }
+        estado.movimentacoes = estado.movimentacoes.filter(x => x.id !== m.id);
+        salvar();
+      }
+      return;
+    }
     if (d.editarLanc) {
       const l = estado.lancamentos.find(x => x.id === d.editarLanc);
       if (!l) return;
@@ -376,8 +513,9 @@
     }
     if (d.excluirConta) {
       const c = estado.contas.find(x => x.id === d.excluirConta);
-      if (c && confirm(`Excluir a conta "${c.nome}"? Os lançamentos vinculados ficarão sem conta.`)) {
+      if (c && confirm(`Excluir a conta "${c.nome}"? Os lançamentos vinculados ficarão sem conta e as movimentações importadas dela serão apagadas.`)) {
         estado.contas = estado.contas.filter(x => x.id !== c.id);
+        estado.movimentacoes = estado.movimentacoes.filter(m => m.contaId !== c.id);
         estado.lancamentos.forEach(l => { if (l.contaId === c.id) l.contaId = ''; });
         salvar();
       }
@@ -403,8 +541,8 @@
     const arq = e.target.files[0];
     if (!arq) return;
     arq.text().then(txt => {
-      const dados = JSON.parse(txt);
-      if (!Array.isArray(dados.contas) || !Array.isArray(dados.lancamentos)) throw new Error('formato');
+      const dados = valido(JSON.parse(txt));
+      if (!dados) throw new Error('formato');
       if (confirm('Substituir todos os dados atuais pelos do arquivo?')) { estado = dados; salvar(); }
     }).catch(() => alert('Arquivo inválido.')).finally(() => { e.target.value = ''; });
   });
@@ -421,6 +559,7 @@
     const novo = (tipo, descricao, valor, d, categoria, contaId, recorrente = true) =>
       ({ id: id(), tipo, descricao, valor, vencimento: dia(d), categoria, contaId, recorrente, diaOriginal: d, pago: false, dataPagamento: null, proximaGerada: false });
     estado = {
+      movimentacoes: [],
       contas: [
         { id: c1, nome: 'Banco principal', tipo: 'Conta corrente', saldo: 3200 },
         { id: c2, nome: 'Poupança', tipo: 'Poupança', saldo: 8500 },
@@ -437,6 +576,41 @@
       ]
     };
     salvar();
+  });
+
+  // ---------- Extrato ----------
+  document.getElementById('filtroExtratoMes').value = hoje().slice(0, 7);
+  document.getElementById('filtroExtratoConta').addEventListener('change', renderExtrato);
+  document.getElementById('filtroExtratoMes').addEventListener('change', renderExtrato);
+  document.getElementById('tabelaExtrato').addEventListener('change', e => {
+    const inp = e.target.closest('.cat-mov');
+    if (!inp) return;
+    const m = estado.movimentacoes.find(x => x.id === inp.dataset.mov);
+    if (!m) return;
+    const nova = inp.value.trim() || 'Outros';
+    const iguais = estado.movimentacoes.filter(x => x.id !== m.id && x.descricao === m.descricao && x.categoria !== nova);
+    m.categoria = nova;
+    if (iguais.length && confirm(`Aplicar a categoria "${nova}" também às outras ${iguais.length} movimentação(ões) "${m.descricao}"?`)) {
+      iguais.forEach(x => { x.categoria = nova; });
+    }
+    salvar();
+  });
+
+  document.getElementById('arquivoExtrato').addEventListener('change', async e => {
+    const arq = e.target.files[0];
+    const msg = document.getElementById('msgImport');
+    if (!arq) return;
+    msg.className = 'msg';
+    msg.textContent = 'Lendo extrato…';
+    try {
+      msg.textContent = await importarExtrato(document.getElementById('contaImport').value, arq);
+      msg.className = 'msg ok';
+    } catch (err) {
+      msg.textContent = err.message || 'Não foi possível ler o arquivo.';
+      msg.className = 'msg erro';
+    } finally {
+      e.target.value = '';
+    }
   });
 
   render();
