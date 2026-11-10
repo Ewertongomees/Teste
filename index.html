@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Panorama Financeiro</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="topo">
+    <h1>Panorama Financeiro</h1>
+    <nav class="abas" role="tablist">
+      <button class="aba ativa" data-aba="painel">Painel</button>
+      <button class="aba" data-aba="lancamentos">Contas a pagar / receber</button>
+      <button class="aba" data-aba="contas">Contas e saldos</button>
+      <button class="aba" data-aba="dados">Dados</button>
+    </nav>
+  </header>
+
+  <main>
+    <!-- PAINEL -->
+    <section id="painel" class="secao ativa">
+      <div class="seletor-mes">
+        <button id="mesAnterior" aria-label="Mês anterior">‹</button>
+        <strong id="mesAtual"></strong>
+        <button id="mesProximo" aria-label="Próximo mês">›</button>
+      </div>
+
+      <div class="cartoes">
+        <div class="cartao"><span>Saldo atual</span><strong id="kSaldo"></strong></div>
+        <div class="cartao"><span>A receber no mês</span><strong id="kReceber" class="pos"></strong></div>
+        <div class="cartao"><span>A pagar no mês</span><strong id="kPagar" class="neg"></strong></div>
+        <div class="cartao destaque"><span>Saldo previsto no fim do mês</span><strong id="kPrevisto"></strong></div>
+      </div>
+
+      <div id="alertaVencidas" class="alerta" hidden></div>
+
+      <div class="grade">
+        <div class="painel-bloco">
+          <h2>Próximos vencimentos</h2>
+          <ul id="listaProximos" class="lista"></ul>
+        </div>
+        <div class="painel-bloco">
+          <h2>Despesas do mês por categoria</h2>
+          <div id="graficoCategorias"></div>
+        </div>
+        <div class="painel-bloco">
+          <h2>Saldo por conta</h2>
+          <ul id="listaSaldos" class="lista"></ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- LANÇAMENTOS -->
+    <section id="lancamentos" class="secao">
+      <form id="formLanc" class="formulario">
+        <h2 id="tituloFormLanc">Novo lançamento</h2>
+        <input type="hidden" name="id">
+        <label>Tipo
+          <select name="tipo">
+            <option value="pagar">A pagar (despesa)</option>
+            <option value="receber">A receber (receita)</option>
+          </select>
+        </label>
+        <label>Descrição <input name="descricao" required placeholder="Ex.: Aluguel"></label>
+        <label>Valor (R$) <input name="valor" type="number" step="0.01" min="0.01" required></label>
+        <label>Vencimento <input name="vencimento" type="date" required></label>
+        <label>Categoria <input name="categoria" list="categorias" placeholder="Ex.: Moradia"></label>
+        <datalist id="categorias"></datalist>
+        <label>Conta <select name="contaId"></select></label>
+        <label class="check"><input type="checkbox" name="recorrente"> Repete todo mês</label>
+        <div class="acoes">
+          <button type="submit">Salvar</button>
+          <button type="button" id="cancelarLanc" class="secundario" hidden>Cancelar edição</button>
+        </div>
+      </form>
+
+      <div class="filtros">
+        <select id="filtroStatus">
+          <option value="pendentes">Pendentes</option>
+          <option value="vencidas">Vencidas</option>
+          <option value="pagas">Pagas / recebidas</option>
+          <option value="todas">Todas</option>
+        </select>
+        <select id="filtroTipo">
+          <option value="">Todos os tipos</option>
+          <option value="pagar">A pagar</option>
+          <option value="receber">A receber</option>
+        </select>
+      </div>
+      <div class="tabela-wrap">
+        <table>
+          <thead><tr><th>Vencimento</th><th>Descrição</th><th>Categoria</th><th>Conta</th><th class="num">Valor</th><th>Status</th><th></th></tr></thead>
+          <tbody id="tabelaLanc"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- CONTAS -->
+    <section id="contas" class="secao">
+      <form id="formConta" class="formulario">
+        <h2 id="tituloFormConta">Nova conta</h2>
+        <input type="hidden" name="id">
+        <label>Nome <input name="nome" required placeholder="Ex.: Nubank, Carteira, Poupança"></label>
+        <label>Tipo
+          <select name="tipo">
+            <option>Conta corrente</option>
+            <option>Poupança</option>
+            <option>Investimento</option>
+            <option>Dinheiro</option>
+            <option>Outro</option>
+          </select>
+        </label>
+        <label>Saldo atual (R$) <input name="saldo" type="number" step="0.01" required></label>
+        <div class="acoes">
+          <button type="submit">Salvar</button>
+          <button type="button" id="cancelarConta" class="secundario" hidden>Cancelar edição</button>
+        </div>
+      </form>
+      <ul id="listaContas" class="lista contas"></ul>
+    </section>
+
+    <!-- DADOS -->
+    <section id="dados" class="secao">
+      <div class="painel-bloco">
+        <h2>Backup dos seus dados</h2>
+        <p>Os dados ficam salvos apenas neste navegador. Exporte um backup de vez em quando.</p>
+        <div class="acoes">
+          <button id="exportar">Exportar (JSON)</button>
+          <label class="botao secundario">Importar <input type="file" id="importar" accept="application/json" hidden></label>
+          <button id="exemplo" class="secundario">Carregar dados de exemplo</button>
+          <button id="limpar" class="perigo">Apagar tudo</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="js/app.js"></script>
+</body>
+</html>
