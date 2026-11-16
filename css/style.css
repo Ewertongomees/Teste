@@ -198,3 +198,8 @@ td.desc { white-space: normal; min-width: 220px; }
 .modal .acoes { justify-content: flex-end; }
 .seletor-mes .imprimir { font-size: .85rem; padding: 4px 10px; margin-left: 8px; }
 .filtros .imprimir { margin-left: auto; }
+.formulario-modal { display: grid; gap: 12px; }
+.formulario-modal h2 { margin: 0; }
+.formulario-modal label { font-size: .85rem; color: var(--suave); display: flex; flex-direction: column; gap: 4px; }
+.formulario-modal .nova { display: grid; gap: 12px; }
+.formulario-modal .acoes { justify-content: flex-end; }

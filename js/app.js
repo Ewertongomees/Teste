@@ -371,14 +371,60 @@
     return conta;
   }
 
+  // Caixa "De qual conta é este extrato?" — escolhe uma conta existente ou cria uma nova
+  function escolherConta(nomeArquivo, r) {
+    return new Promise(resolve => {
+      const datas = r.transacoes.map(t => t.data).sort();
+      const fundo = document.createElement('div');
+      fundo.className = 'modal-fundo';
+      fundo.innerHTML = `<form class="modal formulario-modal">
+        <h2>De qual conta é este extrato?</h2>
+        <p class="dica"></p>
+        <label>Conta <select name="conta"></select></label>
+        <div class="nova">
+          <label>Nome da conta nova <input name="nome" placeholder="Ex.: Caixa"></label>
+          <label>Titular <select name="titular"></select></label>
+        </div>
+        <div class="acoes"><button type="button" class="secundario" data-r="0">Cancelar</button><button type="submit">Importar</button></div>
+      </form>`;
+      const f = fundo.querySelector('form');
+      f.querySelector('.dica').textContent = `${nomeArquivo}: ${r.transacoes.length} movimentação(ões)` +
+        (datas.length ? ` de ${dataBR(datas[0])} a ${dataBR(datas[datas.length - 1])}` : '') +
+        (r.saldo !== null ? `, saldo ${brl.format(r.saldo)}` : '') + '. O arquivo não diz de qual banco ou titular é.';
+      f.conta.innerHTML = estado.contas.map(c => `<option value="${c.id}">${esc(c.nome)} (${esc(entidade(c.entidadeId).nome)})</option>`).join('') +
+        '<option value="__nova">+ Criar conta nova…</option>';
+      f.conta.value = estado.contas.length ? estado.contas[0].id : '__nova';
+      f.titular.innerHTML = estado.entidades.map(e => `<option value="${e.id}">${esc(e.nome)}</option>`).join('');
+      f.titular.value = filtroEnt || (estado.entidades.find(e => e.tipo === 'pessoal') || estado.entidades[0]).id;
+      const atualizar = () => { f.querySelector('.nova').hidden = f.conta.value !== '__nova'; };
+      f.conta.addEventListener('change', atualizar); atualizar();
+      const fechar = v => { fundo.remove(); resolve(v); };
+      f.querySelector('[data-r="0"]').addEventListener('click', e => { e.stopPropagation(); fechar(null); });
+      f.addEventListener('submit', e => {
+        e.preventDefault();
+        if (f.conta.value !== '__nova') return fechar({ conta: estado.contas.find(c => c.id === f.conta.value), nova: false });
+        const nome = f.nome.value.trim();
+        if (!nome) { f.nome.focus(); return; }
+        const conta = { id: id(), nome, tipo: 'Conta corrente', saldo: 0, entidadeId: f.titular.value, banco: nome, titular: '' };
+        estado.contas.push(conta);
+        fechar({ conta, nova: true });
+      });
+      document.body.appendChild(fundo);
+      (f.conta.value === '__nova' ? f.nome : f.conta).focus();
+    });
+  }
+
   async function importarExtrato(contaId, arquivo) {
     let conta = estado.contas.find(c => c.id === contaId);
     if (!conta && contaId !== '__auto') throw new Error('Escolha a conta do banco antes de importar.');
     const r = await window.Extrato.ler(arquivo);
-    if (!conta && !(r.info && r.info.titular) && estado.contas.length) {
-      throw new Error('Este arquivo não diz de quem é a conta. Escolha a conta na lista “Conta” e importe de novo.');
-    }
     let contaNova = false;
+    if (!conta && !(r.info && r.info.titular)) {
+      // O arquivo não diz de quem é a conta (ex.: print do app do banco): pergunta
+      const escolha = await escolherConta(arquivo.name, r);
+      if (!escolha) throw new Error('Importação cancelada.');
+      conta = escolha.conta; contaNova = escolha.nova;
+    }
     if (!conta) { const n = estado.contas.length; conta = await contaAutomatica(r.info || {}); contaNova = estado.contas.length > n; }
     contaId = conta.id;
     const nomes = nomesProprios();
@@ -416,14 +462,19 @@
 
     // Atualização do saldo
     let msgSaldo = '';
-    if (r.saldo !== null && contaNova) {
-      conta.saldo = r.saldo; // conta criada agora: o saldo é o informado pelo banco
-      msgSaldo = ` Saldo: ${brl.format(r.saldo)}.`;
+    if (r.saldo !== null && conta.dataSaldo && r.dataSaldo && r.dataSaldo < conta.dataSaldo) {
+      // extrato mais antigo que o último saldo conhecido: não volta o saldo para trás
+      msgSaldo = ` Saldo mantido (${brl.format(conta.saldo)} em ${dataBR(conta.dataSaldo)}, mais recente que este extrato).`;
+    } else if (r.saldo !== null && (contaNova || (conta.dataSaldo && r.dataSaldo))) {
+      conta.saldo = r.saldo; // conta nova, ou extrato mais novo que o último: vale o saldo do banco
+      conta.dataSaldo = r.dataSaldo || conta.dataSaldo;
+      msgSaldo = ` Saldo: ${brl.format(r.saldo)}${r.dataSaldo ? ' em ' + dataBR(r.dataSaldo) : ''}.`;
     } else if (r.saldo !== null) {
       if (Math.abs(r.saldo - conta.saldo) >= 0.01 &&
           await perguntar(`O banco informou saldo de ${brl.format(r.saldo)}${r.dataSaldo ? ' em ' + dataBR(r.dataSaldo) : ''}.\n` +
                   `O saldo cadastrado de "${conta.nome}" é ${brl.format(conta.saldo)}.\n\nAtualizar para o saldo do banco?`, { ok: 'Atualizar', cancelar: 'Manter' })) {
         conta.saldo = r.saldo;
+        conta.dataSaldo = r.dataSaldo || null;
         msgSaldo = ` Saldo atualizado para ${brl.format(r.saldo)}.`;
       }
     } else if (novas.length) {

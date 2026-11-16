@@ -235,6 +235,7 @@
   function interpretarPDF(paginas) {
     const texto = paginas.map(p => p.map(i => i.str).join(' ')).join(' ');
     const r = /Saldo por transa/i.test(texto) ? lerPDFInter(paginas)
+      : /\d{1,2} de [A-Za-zçÇ]+ de \d{4},/.test(texto) && /Saldo do dia/i.test(texto) ? lerPDFAppDiario(paginas)
       : /C6 Bank/i.test(texto) && /Saldo cont[aá]bil do dia|da transa[cç][aã]o/i.test(texto) ? lerPDFC6(paginas)
       : /Total de entradas/i.test(texto) && /Saldo do dia/i.test(texto) ? lerPDFNubank(paginas)
       : interpretarPaginasPDF(paginas);
@@ -406,6 +407,55 @@
     return { transacoes: comIdsEstaveis(transacoes), saldo, dataSaldo: transacoes[transacoes.length - 1].data, info: { banco: 'C6', titular } };
   }
 
+  // Extrato salvo do app do banco ("Extrato por Período", ex.: Caixa): dia "25 de Setembro de 2026, Sexta-feira",
+  // lançamentos (tipo, nome em 1-2 linhas, valor com "-" separado, etiqueta "25SET") e "Saldo do dia"; mais recente primeiro.
+  function lerPDFAppDiario(paginas) {
+    const transacoes = [];
+    let saldo = null, dataSaldo = null, saldoAnterior = null, ultimaData = '';
+    const reData = /^(\d{1,2}) de ([A-Za-zçÇ]+) de (\d{4}),/;
+    const ehDinheiro = s => /^R\$\s?[\d.]+,\d{2}$/.test(s);
+    for (const itens of paginas) {
+      const ord = [...itens].sort((a, b) => b.y - a.y || a.x - b.x);
+      const datas = ord.filter(i => reData.test(i.str)).map(i => {
+        const m = i.str.match(reData);
+        return { y: i.y, data: dataPorExtenso(`${m[1]} de ${m[2]} de ${m[3]}`) };
+      });
+      const rotulosSaldo = ord.filter(i => /^Saldo (do dia|Anterior)$/i.test(i.str));
+      const valorDe = it => {
+        const menos = ord.find(i => i.str === '-' && Math.abs(i.y - it.y) < 2 && it.x - i.x > 0 && it.x - i.x < 14);
+        return (menos ? -1 : 1) * valorCSV(it.str);
+      };
+      const ancoras = [];
+      for (const it of ord.filter(i => ehDinheiro(i.str))) {
+        const rot = rotulosSaldo.find(r => Math.abs(r.y - it.y) < 3);
+        if (rot) {
+          if (/anterior/i.test(rot.str)) { saldoAnterior = valorDe(it); continue; }
+          const dia = datas.filter(d => d.y > it.y).sort((a, b) => a.y - b.y)[0];
+          const dt = dia ? dia.data : ultimaData;
+          if (dt && (!dataSaldo || dt > dataSaldo)) { dataSaldo = dt; saldo = Math.round(valorDe(it) * 100) / 100; }
+          continue;
+        }
+        const dia = datas.filter(d => d.y > it.y).sort((a, b) => a.y - b.y)[0];
+        ancoras.push({ y: it.y, valor: valorDe(it), data: dia ? dia.data : ultimaData, linhas: [] });
+      }
+      // Textos do lançamento (tipo + nome) ficam na coluna do meio, logo acima/abaixo do valor
+      const textos = ord.filter(i => i.x > 60 && i.x < 290 && !reData.test(i.str) && !/^(Compartilhar|Voltar|Ordenar|Extrato por)/i.test(i.str));
+      for (const t of textos) {
+        const a = ancoras.filter(a => t.y - a.y < 14 && a.y - t.y < 48).sort((p, q) => Math.abs(p.y - t.y) - Math.abs(q.y - t.y))[0];
+        if (a) a.linhas.push(t);
+      }
+      for (const a of ancoras) {
+        const ls = a.linhas.sort((p, q) => q.y - p.y).map(t => t.str);
+        const descricao = ls.length > 1 ? `${ls[0]} - ${ls.slice(1).join(' ')}` : (ls[0] || 'Movimentação');
+        transacoes.push({ data: a.data, valor: Math.round(a.valor * 100) / 100, descricao: descricao.replace(/\s+/g, ' ').trim() });
+      }
+      if (datas.length) ultimaData = datas[datas.length - 1].data;
+    }
+    if (!transacoes.length) throw new Error('Não encontrei movimentações neste extrato.');
+    transacoes.sort((a, b) => a.data.localeCompare(b.data)); // do mais antigo para o mais recente
+    return { transacoes: comIdsEstaveis(transacoes), saldo, dataSaldo, saldoAnterior, info: { banco: '', titular: '' } };
+  }
+
   function l2num(l) { const n = [...l.itens].reverse().find(i => RE_NUM.test(i.str)); return n ? n.str : ''; }
 
   const RE_NUM = /^-?\(?(R\$\s?)?-?\d{1,3}(\.\d{3})*,\d{2}\)?\s*[DC-]?$|^-?\d+,\d{2}$/;
@@ -515,7 +565,8 @@
     [/ifood|restaur|lanchon|burger|pizza|bar |cafe|rappi|delivery/, 'Alimentação'],
     [/uber|99 ?app|99pop|posto|combust|shell|ipiranga|petrobras|estacion|pedagio|sem parar|ipva|detran/, 'Transporte'],
     [/farmac|drogar|droga|hospital|clinica|laborat|unimed|amil|hapvida|academ|smartfit/, 'Saúde'],
-    [/aluguel|condominio|iptu/, 'Moradia'],
+    [/aluguel|condominio|iptu|prestacao\W*hab|habitacao/, 'Moradia'],
+    [/fgts/, 'FGTS'],
     [/energia|enel|cemig|copel|light|celpe|coelba|sabesp|saneam|agua|gas |comgas|claro|vivo|tim |oi |internet|net servicos/, 'Contas da casa'],
     [/netflix|spotify|disney|prime video|amazon prime|hbo|max |youtube|deezer|globoplay|apple\.com|google/, 'Assinaturas'],
     [/fatura|cartao|nubank|pagamento de fatura/, 'Cartão'],
@@ -536,7 +587,7 @@
     /^pix enviado para\s+/i, /^pix recebido (?:c6 )?de\s+/i, /^devol(?:u[cç][aã]o)? recebida pix de\s+/i,
     /^(?:transfer[eê]ncia|reembolso) (?:enviada|recebida|recebido)(?: pelo pix)?\s*-\s*/i,
     /^(?:pix enviado|pix recebido|pix qr code (?:dinamico|estatico|estatic)|devolucao pix|ted-transf elet dispon|pagto eletron cobranca|transfer[eê]ncia recebida)\s*-\s*/i,
-    /^pagamento de boleto efetuado\s*-\s*/i, /^compra no d[eé]bito\s*-\s*/i, /^(?:pagamento|d[eé]bito de cart[aã]o|outros gastos|transfer[eê]ncia)\s*:\s*/i,
+    /^pagamento de boleto efetuado\s*-\s*/i, /^(?:deb|cred) pix (?:chave|qr cod(?:e)? (?:est|din)\w*)\s*-\s*/i, /^pagamento de boleto\s*-\s*/i, /^compra no d[eé]bito\s*-\s*/i, /^(?:pagamento|d[eé]bito de cart[aã]o|outros gastos|transfer[eê]ncia)\s*:\s*/i,
     /^pix recebido\s*-\s*(?:cp\s*:\s*\d+-)?/i
   ];
   function contraparte(descricao) {
