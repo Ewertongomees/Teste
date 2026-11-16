@@ -9,12 +9,22 @@
   // ---------- Estado ----------
   let estado = carregar();
   let mesVisto = hoje().slice(0, 7); // "AAAA-MM"
+  let filtroEnt = ''; // '' = tudo; senão o id do titular (pessoal/empresa)
+  try { filtroEnt = localStorage.getItem(CHAVE + ':titular') || ''; } catch (e) { /* sem armazenamento */ }
+  if (!estado.entidades.some(e => e.id === filtroEnt)) filtroEnt = '';
 
-  function vazio() { return { contas: [], lancamentos: [], movimentacoes: [] }; }
+  const INTERNA = 'Entre minhas contas';
+  const TIPOS_ENT = { pessoal: 'Pessoal', empresa: 'Minha empresa', sociedade: 'Sociedade' };
+
+  function entPessoal() { return { id: 'pessoal', nome: 'Pessoal', tipo: 'pessoal', participacao: null, apelidos: [] }; }
+  function vazio() { return { entidades: [entPessoal()], contas: [], lancamentos: [], movimentacoes: [] }; }
 
   function valido(dados) {
     if (!dados || !Array.isArray(dados.contas) || !Array.isArray(dados.lancamentos)) return null;
     if (!Array.isArray(dados.movimentacoes)) dados.movimentacoes = [];
+    if (!Array.isArray(dados.entidades) || !dados.entidades.length) dados.entidades = [entPessoal()];
+    dados.entidades.forEach(e => { if (!Array.isArray(e.apelidos)) e.apelidos = []; });
+    dados.contas.forEach(c => { if (!dados.entidades.some(e => e.id === c.entidadeId)) c.entidadeId = dados.entidades[0].id; });
     return dados;
   }
 
@@ -67,7 +77,38 @@
     const c = estado.contas.find(c => c.id === contaId);
     return c ? c.nome : '—';
   }
-  function saldoTotal() { return estado.contas.reduce((s, c) => s + c.saldo, 0); }
+  function contasVisiveis() { return estado.contas.filter(c => !filtroEnt || c.entidadeId === filtroEnt); }
+  function idsVisiveis() { return new Set(contasVisiveis().map(c => c.id)); }
+  function lancVisiveis() { const ids = idsVisiveis(); return estado.lancamentos.filter(l => !filtroEnt || ids.has(l.contaId)); }
+  function movVisiveis() { const ids = idsVisiveis(); return estado.movimentacoes.filter(m => !filtroEnt || ids.has(m.contaId)); }
+  function saldoTotal() { return contasVisiveis().reduce((s, c) => s + c.saldo, 0); }
+  function entidade(idEnt) { return estado.entidades.find(e => e.id === idEnt) || estado.entidades[0]; }
+  // Quanto do saldo é seu: em sociedade, só a sua participação
+  function suaParte(c) {
+    const e = entidade(c.entidadeId);
+    return e.tipo === 'sociedade' && Number.isFinite(e.participacao) ? c.saldo * e.participacao / 100 : c.saldo;
+  }
+
+  // Nomes (de pessoas e empresas) normalizados para reconhecer transferências entre as suas contas
+  function normNome(s) {
+    return String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/\b(ltda|me|epp|eireli|s\/?a|s\.a\.?)\b\.?/g, ' ').replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+  }
+  function nomesProprios() {
+    return estado.entidades.flatMap(e => [e.tipo === 'pessoal' ? '' : e.nome, ...e.apelidos]).map(normNome).filter(n => n.length >= 6);
+  }
+  function ehInterna(descricao, nomes = nomesProprios()) {
+    const d = ' ' + normNome(descricao) + ' ';
+    return nomes.some(n => d.includes(' ' + n + ' '));
+  }
+  function recategorizarInternas() {
+    const nomes = nomesProprios();
+    let n = 0;
+    for (const m of estado.movimentacoes) {
+      if (m.categoria !== INTERNA && !m.categoriaManual && ehInterna(m.descricao, nomes)) { m.categoria = INTERNA; n++; }
+    }
+    return n;
+  }
   function sinal(l) { return l.tipo === 'receber' ? 1 : -1; }
 
   // Lançamentos reais + projeções das recorrências até a data limite.
@@ -127,10 +168,60 @@
   // ---------- Importação de extrato ----------
   function diasEntre(a, b) { return Math.abs((new Date(a) - new Date(b)) / 86400000); }
 
+  function pareceEmpresa(nome) {
+    return /\b(ltda|me|epp|eireli|s\/?a|s\.a|construtora|comercio|servicos|industria|estruturas|empreendimentos|cnpj)\b/i.test(normNome(nome) + ' ' + nome);
+  }
+  function tituloCaso(s) {
+    return s.toLowerCase().replace(/\b(ltda|me|epp|eireli)\b\.?/g, '').trim()
+      .replace(/(^|\s)\S/g, c => c.toUpperCase()).replace(/\b(Da|De|Do|Das|Dos|E)\b/g, w => w.toLowerCase())
+      .replace(/^\S{2,4}(?=\s|$)/, w => w.toUpperCase()); // siglas no começo: EWG, EGE
+  }
+
+  // Descobre (ou cria) o titular e a conta a partir do cabeçalho do extrato
+  function contaAutomatica(info) {
+    const titular = (info.titular || '').trim();
+    const banco = info.banco || 'Banco';
+    let ent = null;
+    if (titular) {
+      const n = normNome(titular);
+      ent = estado.entidades.find(e => [e.nome, ...e.apelidos].some(a => normNome(a) === n));
+      if (!ent && pareceEmpresa(titular)) {
+        const nome = tituloCaso(titular);
+        const soc = confirm(`Encontrei a empresa "${titular}" no extrato.\n\nEla tem outros sócios além de você?\n\nOK = sim, é uma sociedade · Cancelar = é só minha`);
+        let participacao = null;
+        if (soc) {
+          const resp = prompt(`Qual é a sua participação na ${nome}, em %? (deixe em branco se não souber agora)`, '');
+          const v = Number(String(resp || '').replace(',', '.').replace('%', ''));
+          participacao = resp && Number.isFinite(v) && v > 0 && v <= 100 ? v : null;
+        }
+        ent = { id: id(), nome, tipo: soc ? 'sociedade' : 'empresa', participacao, apelidos: [titular] };
+        estado.entidades.push(ent);
+      }
+      if (!ent) {
+        ent = estado.entidades.find(e => e.tipo === 'pessoal') || estado.entidades[0];
+        if (!ent.apelidos.some(a => normNome(a) === n)) ent.apelidos.push(titular);
+      }
+    }
+    if (!ent) ent = estado.entidades.find(e => e.tipo === 'pessoal') || estado.entidades[0];
+    let conta = estado.contas.find(c => c.banco === banco && c.entidadeId === ent.id && (!c.titular || !titular || normNome(c.titular) === normNome(titular)));
+    if (!conta) {
+      conta = { id: id(), nome: ent.tipo === 'pessoal' ? banco : `${banco} · ${ent.nome}`, tipo: 'Conta corrente', saldo: 0,
+        entidadeId: ent.id, banco, titular };
+      estado.contas.push(conta);
+    }
+    return conta;
+  }
+
   async function importarExtrato(contaId, arquivo) {
-    const conta = estado.contas.find(c => c.id === contaId);
-    if (!conta) throw new Error('Escolha a conta do banco antes de importar.');
+    let conta = estado.contas.find(c => c.id === contaId);
+    if (!conta && contaId !== '__auto') throw new Error('Escolha a conta do banco antes de importar.');
     const r = await window.Extrato.ler(arquivo);
+    if (!conta && !(r.info && r.info.titular) && estado.contas.length) {
+      throw new Error('Este arquivo não diz de quem é a conta. Escolha a conta na lista “Conta” e importe de novo.');
+    }
+    if (!conta) conta = contaAutomatica(r.info || {});
+    contaId = conta.id;
+    const nomes = nomesProprios();
 
     const chave = t => t.fitid ? 'f:' + t.fitid : `d:${t.data}|${t.valor}|${t.descricao}`;
     const existentes = new Set(estado.movimentacoes.filter(m => m.contaId === contaId).map(chave));
@@ -139,7 +230,8 @@
       const k = chave(t);
       if (existentes.has(k)) continue;
       existentes.add(k);
-      novas.push({ id: id(), contaId, ...t, categoria: window.Extrato.categorizar(t.descricao), lancId: null });
+      const categoria = ehInterna(t.descricao, nomes) ? INTERNA : window.Extrato.categorizar(t.descricao);
+      novas.push({ id: id(), contaId, ...t, categoria, lancId: null });
     }
 
     // Conciliação: dá baixa nas contas a pagar/receber que aparecem no extrato
@@ -181,10 +273,11 @@
       }
     }
     conta.ultimaImportacao = hoje();
+    recategorizarInternas();
     salvar();
 
     const ignoradas = r.transacoes.length - novas.length;
-    return `${r.formato}: ${novas.length} movimentação(ões) importada(s)` +
+    return `${r.formato} → ${conta.nome} (${entidade(conta.entidadeId).nome}): ${novas.length} movimentação(ões) importada(s)` +
       (ignoradas ? `, ${ignoradas} já existia(m)` : '') +
       (conciliadas ? `, ${conciliadas} conta(s) a pagar/receber baixada(s) automaticamente` : '') + '.' + msgSaldo;
   }
@@ -193,6 +286,8 @@
 
   // ---------- Renderização ----------
   function render() {
+    renderFiltroEnt();
+    renderEntidades();
     renderPainel();
     renderLancamentos();
     renderContas();
@@ -208,7 +303,7 @@
     const rotulo = nomeMes.format(new Date(a, m - 1, 1));
     document.getElementById('mesAtual').textContent = rotulo.charAt(0).toUpperCase() + rotulo.slice(1);
 
-    const ocorr = ocorrenciasAte(fim);
+    const ocorr = ocorrenciasAte(fim).filter(l => !filtroEnt || idsVisiveis().has(l.contaId));
     const doMes = ocorr.filter(l => l.vencimento >= inicio && l.vencimento <= fim);
     const pendDoMes = doMes.filter(l => !l.pago);
     const somar = arr => arr.reduce((s, l) => s + l.valor, 0);
@@ -220,12 +315,16 @@
     const previsto = saldoTotal() + pendAteFim.reduce((s, l) => s + sinal(l) * l.valor, 0);
 
     setValor('kSaldo', saldoTotal());
+    const parte = contasVisiveis().reduce((s, c) => s + suaParte(c), 0);
+    const nota = document.getElementById('kSaldoNota');
+    const temSoc = contasVisiveis().some(c => entidade(c.entidadeId).tipo === 'sociedade');
+    nota.textContent = temSoc ? (Math.abs(parte - saldoTotal()) >= 0.01 ? `Sua parte (descontando sócios): ${brl.format(parte)}` : 'Defina sua % nas sociedades para ver a sua parte') : '';
     document.getElementById('kReceber').textContent = brl.format(receber);
     document.getElementById('kPagar').textContent = brl.format(pagar);
     setValor('kPrevisto', previsto);
 
     // Alerta de vencidas
-    const vencidas = estado.lancamentos.filter(l => !l.pago && l.tipo === 'pagar' && l.vencimento < hj);
+    const vencidas = lancVisiveis().filter(l => !l.pago && l.tipo === 'pagar' && l.vencimento < hj);
     const alerta = document.getElementById('alertaVencidas');
     if (vencidas.length) {
       alerta.hidden = false;
@@ -235,7 +334,7 @@
     }
 
     // Próximos vencimentos (pendentes reais, a partir de hoje e atrasados)
-    const proximos = estado.lancamentos.filter(l => !l.pago)
+    const proximos = lancVisiveis().filter(l => !l.pago)
       .sort((x, y) => x.vencimento.localeCompare(y.vencimento)).slice(0, 8);
     const ulProx = document.getElementById('listaProximos');
     ulProx.innerHTML = proximos.length ? proximos.map(l => `
@@ -254,8 +353,10 @@
       porCat[c] = (porCat[c] || 0) + l.valor;
     }
     // + gastos vindos do extrato do banco (os já conciliados com uma conta a pagar não contam de novo)
-    for (const m of estado.movimentacoes) {
+    // Na visão "Tudo", dinheiro que só passou de uma conta sua para outra não é gasto
+    for (const m of movVisiveis()) {
       if (m.valor >= 0 || m.lancId || m.data < inicio || m.data > fim) continue;
+      if (!filtroEnt && m.categoria === INTERNA) continue;
       const c = m.categoria || 'Outros';
       porCat[c] = (porCat[c] || 0) - m.valor;
     }
@@ -267,12 +368,22 @@
         <div class="trilho"><div class="preenchido" style="width:${(v / max * 100).toFixed(1)}%"></div></div>
       </div>`).join('') : '<p class="vazio">Sem despesas neste mês.</p>';
 
-    // Saldo por conta
+    // Saldo por conta, agrupado por titular
     const ulSaldos = document.getElementById('listaSaldos');
-    ulSaldos.innerHTML = estado.contas.length ? estado.contas.map(c => `
-      <li><div>${esc(c.nome)}<small>${esc(c.tipo)}${c.ultimaImportacao ? ' · extrato de ' + dataBR(c.ultimaImportacao) : ''}</small></div>
-      <span class="valor ${c.saldo < 0 ? 'neg' : ''}">${brl.format(c.saldo)}</span></li>`).join('')
-      : '<li class="vazio">Cadastre suas contas na aba “Contas e saldos”.</li>';
+    const visiveis = contasVisiveis();
+    ulSaldos.innerHTML = visiveis.length ? estado.entidades.map(e => {
+      const cs = visiveis.filter(c => c.entidadeId === e.id);
+      if (!cs.length) return '';
+      const total = cs.reduce((s, c) => s + c.saldo, 0);
+      const parteTxt = e.tipo === 'sociedade' && Number.isFinite(e.participacao)
+        ? ` · sua parte (${String(e.participacao).replace('.', ',')}%): ${brl.format(total * e.participacao / 100)}` : '';
+      return `<li class="grupo"><div><strong>${esc(e.nome)}</strong><small>${e.tipo === 'pessoal' ? '' : TIPOS_ENT[e.tipo]}${parteTxt}</small></div>
+          <span class="valor ${total < 0 ? 'neg' : ''}"><strong>${brl.format(total)}</strong></span></li>` +
+        cs.map(c => `
+      <li class="sub"><div>${esc(c.nome)}<small>${esc(c.tipo)}${c.ultimaImportacao ? ' · extrato de ' + dataBR(c.ultimaImportacao) : ''}</small></div>
+      <span class="valor ${c.saldo < 0 ? 'neg' : ''}">${brl.format(c.saldo)}</span></li>`).join('');
+    }).join('')
+      : '<li class="vazio">Cadastre suas contas ou importe um extrato na aba “Contas e saldos”.</li>';
   }
 
   function setValor(elId, v) {
@@ -292,7 +403,7 @@
     const status = document.getElementById('filtroStatus').value;
     const tipo = document.getElementById('filtroTipo').value;
     const hj = hoje();
-    let lista = estado.lancamentos.filter(l => !tipo || l.tipo === tipo);
+    let lista = lancVisiveis().filter(l => !tipo || l.tipo === tipo);
     if (status === 'pendentes') lista = lista.filter(l => !l.pago);
     if (status === 'vencidas') lista = lista.filter(l => !l.pago && l.vencimento < hj);
     if (status === 'pagas') lista = lista.filter(l => l.pago);
@@ -321,9 +432,10 @@
 
   function renderContas() {
     const ul = document.getElementById('listaContas');
-    ul.innerHTML = estado.contas.length ? estado.contas.map(c => `
+    const visiveis = contasVisiveis();
+    ul.innerHTML = visiveis.length ? visiveis.map(c => `
       <li>
-        <div><strong>${esc(c.nome)}</strong><small>${esc(c.tipo)}${c.ultimaImportacao ? ' · último extrato importado em ' + dataBR(c.ultimaImportacao) : ''}</small></div>
+        <div><strong>${esc(c.nome)}</strong><small>${esc(entidade(c.entidadeId).nome)} · ${esc(c.tipo)}${c.ultimaImportacao ? ' · último extrato importado em ' + dataBR(c.ultimaImportacao) : ''}</small></div>
         <div class="acoes">
           <span class="valor ${c.saldo < 0 ? 'neg' : ''}">${brl.format(c.saldo)}</span>
           <button class="mini" data-importar="${c.id}">Importar extrato</button>
@@ -344,18 +456,46 @@
     const cats = [...new Set([...estado.lancamentos, ...estado.movimentacoes].map(l => l.categoria).filter(Boolean))].sort();
     document.getElementById('categorias').innerHTML = cats.map(c => `<option value="${esc(c)}">`).join('');
 
-    for (const [selId, primeira] of [['contaImport', ''], ['filtroExtratoConta', '<option value="">Todas as contas</option>']]) {
+    for (const [selId, primeira, lista] of [
+      ['contaImport', '<option value="__auto">Detectar pelo extrato (cria a conta se precisar)</option>', estado.contas],
+      ['filtroExtratoConta', '<option value="">Todas as contas</option>', contasVisiveis()]]) {
       const s = document.getElementById(selId);
       const v = s.value;
-      s.innerHTML = primeira + estado.contas.map(c => `<option value="${c.id}">${esc(c.nome)}</option>`).join('');
+      s.innerHTML = primeira + lista.map(c => `<option value="${c.id}">${esc(c.nome)}</option>`).join('');
       if ([...s.options].some(o => o.value === v)) s.value = v;
     }
+
+    const selEnt = formConta.entidadeId;
+    const vEnt = selEnt.value;
+    selEnt.innerHTML = estado.entidades.map(e => `<option value="${e.id}">${esc(e.nome)}</option>`).join('');
+    selEnt.value = estado.entidades.some(e => e.id === vEnt) ? vEnt : (filtroEnt || estado.entidades[0].id);
+  }
+
+  function renderFiltroEnt() {
+    const sel = document.getElementById('filtroEntidade');
+    sel.innerHTML = '<option value="">Tudo (pessoal + empresas)</option>' +
+      estado.entidades.map(e => `<option value="${e.id}">${esc(e.nome)}${e.tipo !== 'pessoal' ? ' · ' + TIPOS_ENT[e.tipo] : ''}</option>`).join('');
+    sel.value = filtroEnt;
+  }
+
+  function renderEntidades() {
+    document.getElementById('listaEntidades').innerHTML = estado.entidades.map(e => {
+      const n = estado.contas.filter(c => c.entidadeId === e.id).length;
+      const extra = e.tipo === 'sociedade' ? (Number.isFinite(e.participacao) ? ` · sua parte: ${String(e.participacao).replace('.', ',')}%` : ' · defina sua %') : '';
+      return `<li>
+        <div><strong>${esc(e.nome)}</strong><small>${TIPOS_ENT[e.tipo]}${extra} · ${n} conta(s)${e.apelidos.length ? ' · nos extratos: ' + esc(e.apelidos.join(', ')) : ''}</small></div>
+        <div class="acoes">
+          <button class="mini secundario" data-editar-ent="${e.id}">Editar</button>
+          ${estado.entidades.length > 1 ? `<button class="mini perigo" data-excluir-ent="${e.id}">Excluir</button>` : ''}
+        </div>
+      </li>`;
+    }).join('');
   }
 
   function renderExtrato() {
     const contaId = document.getElementById('filtroExtratoConta').value;
     const mes = document.getElementById('filtroExtratoMes').value;
-    const lista = estado.movimentacoes
+    const lista = movVisiveis()
       .filter(m => (!contaId || m.contaId === contaId) && (!mes || m.data.startsWith(mes)))
       .sort((a, b) => b.data.localeCompare(a.data));
     const entradas = lista.filter(m => m.valor > 0).reduce((s, m) => s + m.valor, 0);
@@ -427,7 +567,7 @@
   formConta.addEventListener('submit', e => {
     e.preventDefault();
     const f = formConta;
-    const dados = { nome: f.nome.value.trim(), tipo: f.tipo.value, saldo: arred(Number(f.saldo.value)) };
+    const dados = { nome: f.nome.value.trim(), tipo: f.tipo.value, saldo: arred(Number(f.saldo.value)), entidadeId: f.entidadeId.value };
     if (f.id.value) {
       Object.assign(estado.contas.find(c => c.id === f.id.value) || {}, dados);
     } else {
@@ -438,12 +578,49 @@
   });
 
   function limparFormConta() {
+    const ent = formConta.entidadeId.value;
     formConta.reset();
+    formConta.entidadeId.value = ent;
     formConta.id.value = '';
     document.getElementById('tituloFormConta').textContent = 'Nova conta';
     document.getElementById('cancelarConta').hidden = true;
   }
   document.getElementById('cancelarConta').addEventListener('click', limparFormConta);
+
+  const formEnt = document.getElementById('formEnt');
+  const atualizarCampoPct = () => { formEnt.querySelector('.so-sociedade').hidden = formEnt.tipo.value !== 'sociedade'; };
+  formEnt.tipo.addEventListener('change', atualizarCampoPct);
+  formEnt.addEventListener('submit', e => {
+    e.preventDefault();
+    const f = formEnt;
+    const pct = Number(String(f.participacao.value).replace(',', '.'));
+    const dados = {
+      nome: f.nome.value.trim(),
+      tipo: f.tipo.value,
+      participacao: f.tipo.value === 'sociedade' && f.participacao.value !== '' && Number.isFinite(pct) ? pct : null,
+      apelidos: f.apelidos.value.split(/\n|;/).map(s => s.trim()).filter(Boolean)
+    };
+    if (f.id.value) Object.assign(entidade(f.id.value), dados);
+    else estado.entidades.push({ id: id(), ...dados });
+    limparFormEnt();
+    recategorizarInternas();
+    salvar();
+  });
+  function limparFormEnt() {
+    formEnt.reset();
+    formEnt.id.value = '';
+    document.getElementById('tituloFormEnt').textContent = 'Novo titular';
+    document.getElementById('cancelarEnt').hidden = true;
+    atualizarCampoPct();
+  }
+  document.getElementById('cancelarEnt').addEventListener('click', limparFormEnt);
+
+  document.getElementById('filtroEntidade').addEventListener('change', e => {
+    filtroEnt = e.target.value;
+    try { localStorage.setItem(CHAVE + ':titular', filtroEnt); } catch (err) { /* sem armazenamento */ }
+    document.getElementById('filtroExtratoConta').value = '';
+    render();
+  });
 
   // ---------- Cliques (delegação) ----------
   document.addEventListener('click', e => {
@@ -507,8 +684,29 @@
       const c = estado.contas.find(x => x.id === d.editarConta);
       if (!c) return;
       formConta.id.value = c.id; formConta.nome.value = c.nome; formConta.tipo.value = c.tipo; formConta.saldo.value = c.saldo;
+      formConta.entidadeId.value = c.entidadeId;
       document.getElementById('tituloFormConta').textContent = 'Editar conta';
       document.getElementById('cancelarConta').hidden = false;
+      return;
+    }
+    if (d.editarEnt) {
+      const en = entidade(d.editarEnt);
+      formEnt.id.value = en.id; formEnt.nome.value = en.nome; formEnt.tipo.value = en.tipo;
+      formEnt.participacao.value = en.participacao ?? ''; formEnt.apelidos.value = en.apelidos.join('\n');
+      document.getElementById('tituloFormEnt').textContent = 'Editar titular';
+      document.getElementById('cancelarEnt').hidden = false;
+      atualizarCampoPct();
+      formEnt.scrollIntoView({ behavior: 'smooth' });
+      return;
+    }
+    if (d.excluirEnt) {
+      const en = entidade(d.excluirEnt);
+      if (estado.contas.some(c => c.entidadeId === en.id)) { alert(`"${en.nome}" ainda tem contas. Mude ou exclua as contas antes.`); return; }
+      if (confirm(`Excluir o titular "${en.nome}"?`)) {
+        estado.entidades = estado.entidades.filter(x => x.id !== en.id);
+        if (filtroEnt === en.id) filtroEnt = '';
+        salvar();
+      }
       return;
     }
     if (d.excluirConta) {
@@ -543,12 +741,12 @@
     arq.text().then(txt => {
       const dados = valido(JSON.parse(txt));
       if (!dados) throw new Error('formato');
-      if (confirm('Substituir todos os dados atuais pelos do arquivo?')) { estado = dados; salvar(); }
+      if (confirm('Substituir todos os dados atuais pelos do arquivo?')) { estado = dados; filtroEnt = ''; salvar(); }
     }).catch(() => alert('Arquivo inválido.')).finally(() => { e.target.value = ''; });
   });
 
   document.getElementById('limpar').addEventListener('click', () => {
-    if (confirm('Apagar TODOS os dados? Isso não pode ser desfeito.')) { estado = vazio(); salvar(); }
+    if (confirm('Apagar TODOS os dados? Isso não pode ser desfeito.')) { estado = vazio(); filtroEnt = ''; salvar(); }
   });
 
   document.getElementById('exemplo').addEventListener('click', () => {
@@ -559,11 +757,12 @@
     const novo = (tipo, descricao, valor, d, categoria, contaId, recorrente = true) =>
       ({ id: id(), tipo, descricao, valor, vencimento: dia(d), categoria, contaId, recorrente, diaOriginal: d, pago: false, dataPagamento: null, proximaGerada: false });
     estado = {
+      entidades: [entPessoal()],
       movimentacoes: [],
       contas: [
-        { id: c1, nome: 'Banco principal', tipo: 'Conta corrente', saldo: 3200 },
-        { id: c2, nome: 'Poupança', tipo: 'Poupança', saldo: 8500 },
-        { id: c3, nome: 'Carteira', tipo: 'Dinheiro', saldo: 150 }
+        { id: c1, nome: 'Banco principal', tipo: 'Conta corrente', saldo: 3200, entidadeId: 'pessoal' },
+        { id: c2, nome: 'Poupança', tipo: 'Poupança', saldo: 8500, entidadeId: 'pessoal' },
+        { id: c3, nome: 'Carteira', tipo: 'Dinheiro', saldo: 150, entidadeId: 'pessoal' }
       ],
       lancamentos: [
         novo('receber', 'Salário', 5500, 5, 'Salário', c1),
@@ -590,8 +789,9 @@
     const nova = inp.value.trim() || 'Outros';
     const iguais = estado.movimentacoes.filter(x => x.id !== m.id && x.descricao === m.descricao && x.categoria !== nova);
     m.categoria = nova;
+    m.categoriaManual = true;
     if (iguais.length && confirm(`Aplicar a categoria "${nova}" também às outras ${iguais.length} movimentação(ões) "${m.descricao}"?`)) {
-      iguais.forEach(x => { x.categoria = nova; });
+      iguais.forEach(x => { x.categoria = nova; x.categoriaManual = true; });
     }
     salvar();
   });

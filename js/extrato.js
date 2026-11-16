@@ -200,8 +200,130 @@
         .filter(i => i.str && i.str.trim())
         .map(i => ({ str: i.str.trim(), x: i.transform[4], y: i.transform[5], w: i.width })));
     }
-    return interpretarPaginasPDF(paginas);
+    return interpretarPDF(paginas);
   }
+
+  // Escolhe o leitor conforme o layout do banco
+  function interpretarPDF(paginas) {
+    const texto = paginas.map(p => p.map(i => i.str).join(' ')).join(' ');
+    const r = /Saldo por transa/i.test(texto) ? lerPDFInter(paginas)
+      : /Total de entradas/i.test(texto) && /Saldo do dia/i.test(texto) ? lerPDFNubank(paginas)
+      : interpretarPaginasPDF(paginas);
+    r.info = Object.assign({ banco: '', titular: '' }, r.info || {});
+    if (!r.info.banco) {
+      const bancos = [['bradesco', 'Bradesco'], ['banco inter', 'Inter'], ['nu pagamentos|nubank', 'Nubank'], ['itau', 'Itaú'],
+        ['santander', 'Santander'], ['caixa economica', 'Caixa'], ['banco do brasil', 'Banco do Brasil'], ['c6 ', 'C6'], ['sicoob', 'Sicoob'], ['sicredi', 'Sicredi']];
+      const n = normalizar(texto);
+      const b = bancos.find(([re]) => new RegExp(re).test(n));
+      if (b) r.info.banco = b[1];
+    }
+    return r;
+  }
+
+  function textoLinha(l) { return l.itens.map(i => i.str).join(' '); }
+
+  const MESES = { jan: 1, fev: 2, mar: 3, abr: 4, mai: 5, jun: 6, jul: 7, ago: 8, set: 9, out: 10, nov: 11, dez: 12 };
+  function dataPorExtenso(s) {
+    const m = normalizar(s).match(/^(\d{1,2})\s+(?:de\s+)?([a-z]{3})[a-z]*\.?\s+(?:de\s+)?(\d{4})$/);
+    if (!m || !MESES[m[2]]) return '';
+    return `${m[3]}-${String(MESES[m[2]]).padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+  }
+
+  function comIdsEstaveis(transacoes) {
+    const vistos = {};
+    for (const t of transacoes) {
+      const base = `${t.data}|${t.doc || ''}|${t.valor}`;
+      vistos[base] = (vistos[base] || 0) + 1;
+      t.fitid = 'pdf:' + base + '|' + vistos[base];
+      delete t.doc;
+    }
+    return transacoes;
+  }
+
+  // Banco Inter: "1 de Dezembro de 2025  Saldo do dia: R$ x" e linhas "Descrição   R$ valor   R$ saldo"
+  function lerPDFInter(paginas) {
+    const transacoes = [];
+    let data = '', saldo = null, titular = '';
+    let corpo = false; // começa na primeira data e segue pelas páginas seguintes
+    paginas.forEach((itens, nPag) => {
+      const linhas = agruparLinhas(itens);
+      if (nPag === 0) {
+        const iCpf = linhas.findIndex(l => /CPF\/CNPJ/i.test(textoLinha(l)));
+        if (iCpf > 0) titular = textoLinha(linhas[iCpf - 1]).trim();
+      }
+      for (const l of linhas) {
+        const t = textoLinha(l);
+        if (/^Fale com a gente|^SAC:|Ouvidoria:/i.test(t)) continue;
+        const d = dataPorExtenso(l.itens[0].str);
+        if (d) { data = d; corpo = true; continue; }
+        if (!corpo || !data) continue;
+        const nums = l.itens.filter(i => RE_NUM.test(i.str) && i.x > 300);
+        if (!nums.length) continue;
+        const desc = l.itens.filter(i => i.x < 300).map(i => i.str).join(' ')
+          .replace(/:\s*"(?:Cp\s*:\s*\d+-)?/i, ' - ').replace(/"/g, '').replace(/\s+/g, ' ').trim();
+        transacoes.push({ data, valor: Math.round(valorCSV(nums[0].str) * 100) / 100, descricao: desc || 'Movimentação' });
+        if (nums[1]) saldo = Math.round(valorCSV(nums[1].str) * 100) / 100;
+      }
+    });
+    if (!transacoes.length) throw new Error('Não encontrei movimentações neste PDF do Inter.');
+    return { transacoes: comIdsEstaveis(transacoes), saldo, dataSaldo: transacoes[transacoes.length - 1].data, info: { banco: 'Inter', titular } };
+  }
+
+  // Nubank (PF e PJ): dia "22 AGO 2026", blocos "Total de entradas" / "Total de saídas", valores sem sinal
+  function lerPDFNubank(paginas) {
+    const transacoes = [];
+    let data = '', sinal = 1, atual = null, titular = '', saldo = null, dataSaldo = null;
+    const fechar = () => {
+      if (!atual) return;
+      const contraparte = atual.contra.join(' ').split(/\s+-\s+/)[0].trim();
+      atual.descricao = [atual.tipo.join(' '), contraparte].filter(Boolean).join(' - ').replace(/\s+/g, ' ');
+      delete atual.tipo; delete atual.contra;
+      transacoes.push(atual);
+      atual = null;
+    };
+    paginas.forEach((itens, nPag) => {
+      const linhas = agruparLinhas(itens);
+      if (nPag === 0) {
+        titular = linhas.length ? textoLinha(linhas[0]).trim() : '';
+        const iFinal = linhas.findIndex(l => /^Saldo final do per/i.test(textoLinha(l)) && l.itens.some(i => RE_NUM.test(i.str)));
+        if (iFinal >= 0) saldo = Math.round(valorCSV(l2num(linhas[iFinal])) * 100) / 100;
+      }
+      // Corpo: depois da linha do período ("VALORES EM R$") e, na 1ª página, depois de "Movimentações"
+      let corpo = false;
+      for (const l of linhas) {
+        const t = textoLinha(l);
+        if (!corpo) {
+          if (nPag === 0 ? /^Movimenta/i.test(t) : /VALORES EM R\$/i.test(t)) corpo = true;
+          continue;
+        }
+        // Rodapé (sensível a maiúsculas: "NU PAGAMENTOS - IP" no meio de um PIX não é rodapé)
+        if (/^(Tem alguma dúvida|Extrato gerado dia|Não nos responsabilizamos|Asseguramos a autenticidade|Nu Financeira S\.A|Nu Pagamentos S\.A|Caso a solução)/.test(t)) break;
+        let itensL = l.itens;
+        const d = dataPorExtenso(itensL[0].str);
+        if (d) { data = d; itensL = itensL.slice(1); }
+        const tl = itensL.map(i => i.str).join(' ');
+        if (/^Total de entradas/i.test(tl)) { fechar(); sinal = 1; continue; }
+        if (/^Total de sa[ií]das/i.test(tl)) { fechar(); sinal = -1; continue; }
+        if (/^Saldo do dia/i.test(tl)) { fechar(); continue; }
+        if (!itensL.length) continue;
+        const num = itensL.find(i => RE_NUM.test(i.str) && i.x > 400);
+        if (num) {
+          fechar();
+          atual = { data, valor: Math.round(sinal * Math.abs(valorCSV(num.str)) * 100) / 100, tipo: [], contra: [] };
+          dataSaldo = data;
+        }
+        if (!atual) continue;
+        for (const i of itensL) {
+          if (i === num) continue;
+          (i.x < 250 ? atual.tipo : atual.contra).push(i.str);
+        }
+      }
+      fechar();
+    });
+    if (!transacoes.length) throw new Error('Não encontrei movimentações neste PDF do Nubank.');
+    return { transacoes: comIdsEstaveis(transacoes), saldo, dataSaldo, info: { banco: 'Nubank', titular } };
+  }
+  function l2num(l) { const n = [...l.itens].reverse().find(i => RE_NUM.test(i.str)); return n ? n.str : ''; }
 
   const RE_NUM = /^-?\(?(R\$\s?)?-?\d{1,3}(\.\d{3})*,\d{2}\)?\s*[DC-]?$|^-?\d+,\d{2}$/;
   const RE_DATA = /^\d{2}\/\d{2}\/\d{2,4}$/;
@@ -282,13 +404,7 @@
     if (!viuCabecalho) throw new Error('Não reconheci o layout deste PDF. Se puder, exporte o extrato em OFX ou CSV.');
 
     // Identificador estável para não duplicar ao reimportar
-    const vistos = {};
-    for (const t of transacoes) {
-      const base = `${t.data}|${t.doc}|${t.valor}`;
-      vistos[base] = (vistos[base] || 0) + 1;
-      t.fitid = 'pdf:' + base + '|' + vistos[base];
-      delete t.doc;
-    }
+    comIdsEstaveis(transacoes);
 
     // Saldo: o PDF mostra o saldo sem sinal (negativo só pela cor). Descobre o sinal pela soma das movimentações.
     let saldo = null, dataSaldo = null;
@@ -305,7 +421,8 @@
       if (Math.abs(Math.abs(saldo) - saldosAbs[ult]) > 0.01) saldo = saldosAbs[ult]; // não bateu: usa o valor impresso
       dataSaldo = transacoes[ult].data;
     }
-    return { transacoes, saldo, dataSaldo };
+    const nome = paginas[0].find(i => /^Nome:/i.test(i.str));
+    return { transacoes, saldo, dataSaldo, info: { titular: nome ? nome.str.replace(/^Nome:\s*/i, '').trim() : '' } };
   }
 
   // ---------- Categorização automática ----------

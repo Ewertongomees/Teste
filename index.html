@@ -8,7 +8,10 @@
 </head>
 <body>
   <header class="topo">
-    <h1>Panorama Financeiro</h1>
+    <div class="topo-linha">
+      <h1>Panorama Financeiro</h1>
+      <label class="ver">Ver <select id="filtroEntidade" aria-label="Titular"></select></label>
+    </div>
     <nav class="abas" role="tablist">
       <button class="aba ativa" data-aba="painel">Painel</button>
       <button class="aba" data-aba="lancamentos">Contas a pagar / receber</button>
@@ -28,7 +31,7 @@
       </div>
 
       <div class="cartoes">
-        <div class="cartao"><span>Saldo atual</span><strong id="kSaldo"></strong></div>
+        <div class="cartao"><span>Saldo atual</span><strong id="kSaldo"></strong><small id="kSaldoNota" class="nota"></small></div>
         <div class="cartao"><span>A receber no mês</span><strong id="kReceber" class="pos"></strong></div>
         <div class="cartao"><span>A pagar no mês</span><strong id="kPagar" class="neg"></strong></div>
         <div class="cartao destaque"><span>Saldo previsto no fim do mês</span><strong id="kPrevisto"></strong></div>
@@ -112,6 +115,7 @@
             <option>Outro</option>
           </select>
         </label>
+        <label>Titular <select name="entidadeId"></select></label>
         <label>Saldo atual (R$) <input name="saldo" type="number" step="0.01" required></label>
         <div class="acoes">
           <button type="submit">Salvar</button>
@@ -124,7 +128,8 @@
         <h2>Conectar banco (importar extrato)</h2>
         <p>Traga as movimentações e o saldo do seu banco. No app ou internet banking, exporte o extrato em
           <strong>OFX</strong> (às vezes chamado de “Money”, “Quicken” ou “Open Financial Exchange”), <strong>CSV/planilha</strong>
-          ou <strong>PDF</strong> e envie o arquivo aqui. Funciona com Nubank, Itaú, Bradesco, Banco do Brasil, Caixa, Santander, Inter, C6 e outros.</p>
+          ou <strong>PDF</strong> e envie o arquivo aqui. Deixe em “Detectar pelo extrato” que o app reconhece
+          o banco e o titular (pessoa ou empresa) e cria a conta sozinho. Funciona com Nubank, Itaú, Bradesco, Banco do Brasil, Caixa, Santander, Inter, C6 e outros.</p>
         <ul class="dicas">
           <li>As movimentações são categorizadas automaticamente (mercado, transporte, contas da casa…).</li>
           <li>Contas a pagar/receber cadastradas que aparecerem no extrato recebem baixa sozinhas.</li>
@@ -138,6 +143,33 @@
           </label>
         </div>
         <p id="msgImport" class="msg" aria-live="polite"></p>
+      </div>
+
+      <div class="painel-bloco titulares">
+        <h2>Titulares: você e suas empresas</h2>
+        <p class="dica">Separe o que é pessoal, o que é da sua empresa e o que é de sociedade. Use o seletor <strong>Ver</strong> no topo
+          para olhar cada um ou tudo junto. PIX entre esses titulares viram “Entre minhas contas” e não contam como gasto na visão geral.</p>
+        <ul id="listaEntidades" class="lista"></ul>
+        <form id="formEnt" class="formulario embutido">
+          <h2 id="tituloFormEnt">Novo titular</h2>
+          <input type="hidden" name="id">
+          <label>Nome <input name="nome" required placeholder="Ex.: Minha Empresa"></label>
+          <label>Tipo
+            <select name="tipo">
+              <option value="empresa">Minha empresa</option>
+              <option value="sociedade">Sociedade (tem sócios)</option>
+              <option value="pessoal">Pessoal</option>
+            </select>
+          </label>
+          <label class="so-sociedade" hidden>Sua participação (%) <input name="participacao" type="number" step="0.01" min="0" max="100" placeholder="Ex.: 50"></label>
+          <label class="largo">Nomes como aparecem nos extratos (um por linha)
+            <textarea name="apelidos" rows="2" placeholder="Ex.: MINHA EMPRESA LTDA"></textarea>
+          </label>
+          <div class="acoes">
+            <button type="submit">Salvar titular</button>
+            <button type="button" id="cancelarEnt" class="secundario" hidden>Cancelar edição</button>
+          </div>
+        </form>
       </div>
     </section>
 

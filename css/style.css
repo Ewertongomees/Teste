@@ -138,3 +138,16 @@ label.inline select { width: auto; min-width: 160px; }
 .resumo { margin: 8px 0; color: var(--suave); }
 .filtros input[type=month] { width: auto; }
 input.cat-mov { padding: 4px 8px; min-width: 140px; }
+
+.topo-linha { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+.topo-linha h1 { margin: 0; }
+label.ver { display: flex; align-items: center; gap: 8px; color: var(--suave); font-size: .9rem; }
+label.ver select { width: auto; max-width: 70vw; }
+.cartao .nota { display: block; color: var(--suave); font-size: .8rem; margin-top: 2px; }
+.lista li.grupo { border-bottom: 0; padding-bottom: 2px; margin-top: 6px; }
+.lista li.sub { padding-left: 12px; }
+.titulares { margin-top: 16px; }
+.dica { color: var(--suave); font-size: .9rem; margin: 0 0 8px; }
+.formulario.embutido { border: 0; padding: 12px 0 0; margin: 0; }
+.formulario .largo { grid-column: 1 / -1; }
+textarea { font: inherit; width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--borda); background: var(--fundo); color: var(--texto); resize: vertical; }

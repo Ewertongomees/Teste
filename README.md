@@ -14,6 +14,8 @@ Os dados ficam salvos no próprio navegador (localStorage). Use a aba **Dados** 
 - **Contas a pagar / receber**: cadastro com descrição, valor, vencimento, categoria, conta vinculada e opção de repetir todo mês. Ao marcar como "Paguei"/"Recebi", o saldo da conta é atualizado e, se for recorrente, a próxima ocorrência é criada automaticamente.
 - **Contas e saldos**: cadastro de contas (corrente, poupança, investimento, dinheiro…) com o saldo atual.
 - **Conectar banco (importar extrato)**: envie o extrato exportado pelo banco em **OFX**, **CSV** ou **PDF** (Nubank, Itaú, Bradesco, BB, Caixa, Santander, Inter, C6…). O app importa as movimentações sem duplicar, categoriza os gastos automaticamente, atualiza o saldo (no OFX usa o saldo informado pelo banco) e dá baixa nas contas a pagar/receber que aparecem no extrato. O arquivo é lido apenas no navegador.
+- **Titulares (pessoal, minha empresa, sociedade)**: cada conta pertence a um titular. O seletor **Ver** no topo mostra o panorama de um titular ou de tudo junto. Em sociedades, informe sua participação (%) para ver a sua parte do saldo. PIX entre titulares seus viram "Entre minhas contas" e não contam como gasto na visão geral.
+- **Detecção automática**: ao importar um PDF, o app reconhece banco e titular (pessoa ou empresa) e cria a conta e o titular sozinho. Leitores de PDF testados: Bradesco, Banco Inter e Nubank (PF/PJ).
 - **Extrato**: movimentações importadas por conta e mês, com entradas, saídas e categoria editável.
 - **Dados**: exportar, importar, carregar dados de exemplo e apagar tudo.
 
