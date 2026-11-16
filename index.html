@@ -123,8 +123,8 @@
       <div class="painel-bloco conectar">
         <h2>Conectar banco (importar extrato)</h2>
         <p>Traga as movimentações e o saldo do seu banco. No app ou internet banking, exporte o extrato em
-          <strong>OFX</strong> (às vezes chamado de “Money”, “Quicken” ou “Open Financial Exchange”) ou em <strong>CSV/planilha</strong>
-          e envie o arquivo aqui. Funciona com Nubank, Itaú, Bradesco, Banco do Brasil, Caixa, Santander, Inter, C6 e outros.</p>
+          <strong>OFX</strong> (às vezes chamado de “Money”, “Quicken” ou “Open Financial Exchange”), <strong>CSV/planilha</strong>
+          ou <strong>PDF</strong> e envie o arquivo aqui. Funciona com Nubank, Itaú, Bradesco, Banco do Brasil, Caixa, Santander, Inter, C6 e outros.</p>
         <ul class="dicas">
           <li>As movimentações são categorizadas automaticamente (mercado, transporte, contas da casa…).</li>
           <li>Contas a pagar/receber cadastradas que aparecerem no extrato recebem baixa sozinhas.</li>
@@ -134,7 +134,7 @@
         <div class="acoes">
           <label class="inline">Conta <select id="contaImport"></select></label>
           <label class="botao">Escolher arquivo do extrato
-            <input type="file" id="arquivoExtrato" accept=".ofx,.qfx,.csv,.txt,text/csv,application/x-ofx" hidden>
+            <input type="file" id="arquivoExtrato" accept=".ofx,.qfx,.csv,.txt,.pdf,text/csv,application/x-ofx,application/pdf" hidden>
           </label>
         </div>
         <p id="msgImport" class="msg" aria-live="polite"></p>
