@@ -456,14 +456,23 @@
     const cats = [...new Set([...estado.lancamentos, ...estado.movimentacoes].map(l => l.categoria).filter(Boolean))].sort();
     document.getElementById('categorias').innerHTML = cats.map(c => `<option value="${esc(c)}">`).join('');
 
-    for (const [selId, primeira, lista] of [
-      ['contaImport', '<option value="__auto">Detectar pelo extrato (cria a conta se precisar)</option>', estado.contas],
-      ['filtroExtratoConta', '<option value="">Todas as contas</option>', contasVisiveis()]]) {
-      const s = document.getElementById(selId);
-      const v = s.value;
-      s.innerHTML = primeira + lista.map(c => `<option value="${c.id}">${esc(c.nome)}</option>`).join('');
-      if ([...s.options].some(o => o.value === v)) s.value = v;
-    }
+    const sImp = document.getElementById('contaImport');
+    const vImp = sImp.value;
+    sImp.innerHTML = '<option value="__auto">Detectar pelo extrato (cria a conta se precisar)</option>' +
+      estado.contas.map(c => `<option value="${c.id}">${esc(c.nome)}</option>`).join('');
+    if ([...sImp.options].some(o => o.value === vImp)) sImp.value = vImp;
+
+    // Banco / conta do extrato: todos, um banco inteiro (todas as contas dele) ou uma conta
+    const sB = document.getElementById('fBanco');
+    const vB = sB.value;
+    const visiveis = contasVisiveis();
+    const bancos = [...new Set(visiveis.map(bancoDe))].sort();
+    sB.innerHTML = '<option value="">Todos os bancos</option>' +
+      (bancos.length ? '<optgroup label="Banco (todas as contas)">' +
+        bancos.map(b => `<option value="b:${esc(b)}">${esc(b)} · ${visiveis.filter(c => bancoDe(c) === b).length} conta(s)</option>`).join('') + '</optgroup>' : '') +
+      (visiveis.length ? '<optgroup label="Uma conta">' +
+        visiveis.map(c => `<option value="c:${c.id}">${esc(c.nome)}${filtroEnt ? '' : ' (' + esc(entidade(c.entidadeId).nome) + ')'}</option>`).join('') + '</optgroup>' : '');
+    sB.value = [...sB.options].some(o => o.value === vB) ? vB : '';
 
     const selEnt = formConta.entidadeId;
     const vEnt = selEnt.value;
@@ -492,26 +501,237 @@
     }).join('');
   }
 
+  // ---------- Extrato: fornecedores, filtros e resumo ----------
+  function bancoDe(c) { return c.banco || c.nome; }
+
+  // Agrupa as variações do mesmo nome (maiúsculas, LTDA/ME, nomes cortados pelo banco)
+  let cacheGrupos = { chave: '', mapa: null };
+  function gruposContraparte() {
+    const chaveCache = estado.movimentacoes.length + '|' + (estado.movimentacoes[0] || {}).id + '|' + (estado.movimentacoes[estado.movimentacoes.length - 1] || {}).id;
+    if (cacheGrupos.chave === chaveCache) return cacheGrupos.mapa;
+    const contagem = {}; // chave normalizada -> { variações: {nome: n}, n }
+    const chaveDe = nome => normNome(nome).replace(/\b\d{6,}\b/g, '').replace(/\s+/g, ' ').trim();
+    for (const m of estado.movimentacoes) {
+      const nome = rotuloMov(m);
+      const k = chaveDe(nome);
+      if (!k) continue;
+      const g = contagem[k] || (contagem[k] = { variacoes: {}, n: 0 });
+      g.variacoes[nome] = (g.variacoes[nome] || 0) + 1;
+      g.n++;
+    }
+    // nome cortado ("RAFAEL CLEITON OLIVEI") -> nome completo que começa igual
+    const chaves = Object.keys(contagem).sort((a, b) => b.length - a.length);
+    const destino = {};
+    for (const k of chaves) {
+      if (k.length < 12) { destino[k] = k; continue; }
+      const maior = chaves.filter(L => L.length > k.length && L.startsWith(k) && destino[L] === L)
+        .sort((a, b) => contagem[b].n - contagem[a].n)[0];
+      destino[k] = maior || k;
+    }
+    const mapa = {}; // chave -> { chave final, nome de exibição }
+    const finais = {};
+    for (const k of chaves) {
+      const f = destino[k];
+      const g = finais[f] || (finais[f] = { variacoes: {}, n: 0 });
+      Object.entries(contagem[k].variacoes).forEach(([v, n]) => { g.variacoes[v] = (g.variacoes[v] || 0) + n; });
+      g.n += contagem[k].n;
+    }
+    for (const [f, g] of Object.entries(finais)) {
+      // exibe a forma mais completa; empate: a mais usada
+      const vs = Object.entries(g.variacoes).sort((a, b) => b[0].length - a[0].length || b[1] - a[1]);
+      g.nome = vs[0][0];
+    }
+    for (const k of chaves) mapa[k] = { chave: destino[k], nome: finais[destino[k]].nome };
+    const resultado = { chaveDe, mapa, finais };
+    cacheGrupos = { chave: chaveCache, mapa: resultado };
+    return resultado;
+  }
+  // Nome do fornecedor/cliente, ou a própria descrição resumida (tarifas, saques, rendimentos...)
+  function rotuloMov(m) {
+    return window.Extrato.contraparte(m.descricao) ||
+      m.descricao.replace(/\s+-\s+.*$/, '').replace(/\s+\d[\d.,/%]*$/, '').trim() || m.descricao;
+  }
+  function fornecedorDe(m) {
+    const g = gruposContraparte();
+    const info = g.mapa[g.chaveDe(rotuloMov(m))];
+    return info || { chave: '', nome: rotuloMov(m) };
+  }
+
+  function periodoSelecionado() {
+    const v = document.getElementById('fPeriodo').value;
+    const hj = hoje(), mes = hj.slice(0, 7);
+    switch (v) {
+      case 'mes': return [mes + '-01', fimDoMes(mes)];
+      case 'mesPassado': { const m = somaMes(mes, -1); return [m + '-01', fimDoMes(m)]; }
+      case '3m': return [somaMes(mes, -2) + '-01', hj];
+      case 'ano': return [hj.slice(0, 4) + '-01-01', hj];
+      case '12m': return [somaMes(mes, -11) + '-01', hj];
+      case 'custom': return [document.getElementById('fDe').value || '0000', document.getElementById('fAte').value || '9999'];
+      default: return ['0000', '9999'];
+    }
+  }
+
+  let limiteTabela = 200, limiteRanking = 10;
+
+  function filtrarExtrato() {
+    const banco = document.getElementById('fBanco').value;
+    const tipo = document.getElementById('fTipo').value;
+    const busca = document.getElementById('fBusca').value.trim();
+    const [de, ate] = periodoSelecionado();
+    const g = gruposContraparte();
+    const chaveBusca = busca ? (g.mapa[g.chaveDe(busca)] || {}).chave : '';
+    const termo = normNome(busca);
+    // Sem busca, transferências entre as suas próprias contas ficam de fora (não são fornecedores nem clientes)
+    const semInternas = !busca && !document.getElementById('fInternas').checked;
+    const contaOk = banco.startsWith('c:') ? (m => m.contaId === banco.slice(2))
+      : banco.startsWith('b:') ? (() => { const ids = new Set(estado.contas.filter(c => bancoDe(c) === banco.slice(2)).map(c => c.id)); return m => ids.has(m.contaId); })()
+      : () => true;
+    const lista = movVisiveis().filter(m => {
+      if (!contaOk(m)) return false;
+      if (tipo === 'saida' && m.valor >= 0) return false;
+      if (tipo === 'entrada' && m.valor <= 0) return false;
+      if (m.data < de || m.data > ate) return false;
+      if (semInternas && m.categoria === INTERNA) return false;
+      if (busca) {
+        const f = fornecedorDe(m);
+        if (chaveBusca) return f.chave === chaveBusca;           // nome escolhido da lista: só esse fornecedor
+        return normNome(f.nome).includes(termo) || normNome(m.descricao).includes(termo);
+      }
+      return true;
+    }).sort((a, b) => b.data.localeCompare(a.data));
+    return { lista, chaveBusca, busca, tipo };
+  }
+
+  function barras(pares, cls = '') {
+    if (!pares.length) return '<p class="vazio">Nada no filtro.</p>';
+    const max = Math.max(...pares.map(p => Math.abs(p[1])));
+    return pares.map(([rot, v, extra]) => `
+      <div class="barra">
+        <div class="rotulo"><span>${esc(rot)}</span><span>${brl.format(v)}${extra ? ' <small>' + extra + '</small>' : ''}</span></div>
+        <div class="trilho"><div class="preenchido ${cls}" style="width:${max ? (Math.abs(v) / max * 100).toFixed(1) : 0}%"></div></div>
+      </div>`).join('');
+  }
+
+  function cartao(rotulo, valor, cls = '', sub = '') {
+    return `<div class="cartao"><span>${rotulo}</span><strong class="${cls}">${valor}</strong>${sub ? `<small>${sub}</small>` : ''}</div>`;
+  }
+
   function renderExtrato() {
-    const contaId = document.getElementById('filtroExtratoConta').value;
-    const mes = document.getElementById('filtroExtratoMes').value;
-    const lista = movVisiveis()
-      .filter(m => (!contaId || m.contaId === contaId) && (!mes || m.data.startsWith(mes)))
-      .sort((a, b) => b.data.localeCompare(a.data));
-    const entradas = lista.filter(m => m.valor > 0).reduce((s, m) => s + m.valor, 0);
-    const saidas = lista.filter(m => m.valor < 0).reduce((s, m) => s - m.valor, 0);
-    document.getElementById('resumoExtrato').innerHTML = lista.length
-      ? `Entradas <strong class="pos">${brl.format(entradas)}</strong> · Saídas <strong class="neg">${brl.format(saidas)}</strong> · ${lista.length} movimentação(ões)`
-      : '';
-    document.getElementById('tabelaExtrato').innerHTML = lista.length ? lista.map(m => `<tr>
+    document.querySelectorAll('.filtros-extrato .datas').forEach(el => { el.hidden = document.getElementById('fPeriodo').value !== 'custom'; });
+    const g = gruposContraparte();
+    // Sugestões da busca: fornecedores/clientes ordenados por movimentação
+    const sugest = Object.values(g.finais).sort((a, b) => b.n - a.n).slice(0, 400);
+    const dl = document.getElementById('listaContrapartes');
+    const htmlDl = sugest.map(f => `<option value="${esc(f.nome)}">`).join('');
+    if (dl.innerHTML !== htmlDl) dl.innerHTML = htmlDl;
+
+    const { lista, chaveBusca, busca, tipo } = filtrarExtrato();
+    document.getElementById('fLimpar').hidden = !busca;
+    const saidas = lista.filter(m => m.valor < 0), entradas = lista.filter(m => m.valor > 0);
+    const totS = saidas.reduce((s, m) => s - m.valor, 0), totE = entradas.reduce((s, m) => s + m.valor, 0);
+    const datas = lista.map(m => m.data).sort();
+    const periodoTxt = datas.length ? `${dataBR(datas[0])} a ${dataBR(datas[datas.length - 1])}` : '';
+
+    // Título e cartões de resumo
+    const nomeBusca = chaveBusca ? Object.values(g.mapa).find(x => x.chave === chaveBusca).nome : busca;
+    const selB = document.getElementById('fBanco');
+    const bancoTxt = selB.value ? selB.options[selB.selectedIndex].text.replace(/ · \d+ conta\(s\)$/, '') : 'todos os bancos';
+    document.getElementById('tituloResumo').innerHTML = (nomeBusca ? `Resumo: ${esc(nomeBusca)}` : 'Resumo do filtro') +
+      ` <small>· ${esc(bancoTxt)}${periodoTxt ? ' · ' + periodoTxt : ''}</small>`;
+    const principal = tipo === 'entrada' ? entradas : saidas;
+    const totP = tipo === 'entrada' ? totE : totS;
+    const maior = principal.reduce((m, x) => Math.abs(x.valor) > Math.abs(m ? m.valor : 0) ? x : m, null);
+    const palavra = tipo === 'entrada' ? 'recebido' : 'pago';
+    let cards;
+    if (tipo === '') {
+      cards = cartao('Total pago (saídas)', brl.format(totS), 'neg', `${saidas.length} pagamento(s)`) +
+        cartao('Total recebido (entradas)', brl.format(totE), 'pos', `${entradas.length} recebimento(s)`) +
+        cartao('Diferença', brl.format(totE - totS), totE - totS < 0 ? 'neg' : 'pos', 'entradas − saídas') +
+        cartao('Movimentações', String(lista.length), '', periodoTxt);
+    } else {
+      cards = cartao(`Total ${palavra}`, brl.format(totP), tipo === 'entrada' ? 'pos' : 'neg', `${principal.length} ${tipo === 'entrada' ? 'recebimento(s)' : 'pagamento(s)'}`) +
+        cartao('Valor médio', brl.format(principal.length ? totP / principal.length : 0)) +
+        cartao(tipo === 'entrada' ? 'Maior recebimento' : 'Maior pagamento', maior ? brl.format(Math.abs(maior.valor)) : '—', '', maior ? dataBR(maior.data) : '') +
+        cartao(tipo === 'entrada' ? 'Último recebimento' : 'Último pagamento', datas.length ? dataBR(datas[datas.length - 1]) : '—', '', datas.length ? `primeiro em ${dataBR(datas[0])}` : '');
+    }
+    document.getElementById('resumoCartoes').innerHTML = lista.length ? cards : '';
+
+    // Ranking de fornecedores (ou clientes)
+    const base = tipo === 'entrada' ? entradas : saidas;
+    const rank = {};
+    for (const m of base) {
+      const f = fornecedorDe(m);
+      const k = f.chave || f.nome;
+      const r = rank[k] || (rank[k] = { nome: f.nome, total: 0, n: 0 });
+      r.total += Math.abs(m.valor); r.n++;
+    }
+    const lr = Object.values(rank).sort((a, b) => b.total - a.total);
+    document.getElementById('tituloRanking').textContent = tipo === 'entrada' ? 'De quem você mais recebeu' : 'Para quem você mais pagou';
+    const totRank = lr.reduce((s, r) => s + r.total, 0);
+    document.getElementById('ranking').innerHTML = lr.length ? lr.slice(0, limiteRanking).map(r => `
+      <li data-fornecedor="${esc(r.nome)}" title="Ver só ${esc(r.nome)}">
+        <div><span class="nome">${esc(r.nome)}</span><small>${r.n} ${r.n === 1 ? 'vez' : 'vezes'} · ${totRank ? (r.total / totRank * 100).toFixed(1).replace('.', ',') : 0}% do total</small></div>
+        <span class="valor">${brl.format(r.total)}</span>
+      </li>`).join('') : '<li class="vazio">Nada no filtro.</li>';
+    const btnMais = document.getElementById('rankingMais');
+    btnMais.hidden = lr.length <= limiteRanking;
+
+    // Por banco e por mês
+    const porConta = {};
+    for (const m of lista) {
+      const c = estado.contas.find(c => c.id === m.contaId);
+      const rot = c ? c.nome : '—';
+      porConta[rot] = (porConta[rot] || 0) + (tipo === '' ? m.valor : Math.abs(m.valor));
+    }
+    document.getElementById('porBanco').innerHTML = barras(Object.entries(porConta).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])));
+    const porMes = {};
+    for (const m of lista) { const k = m.data.slice(0, 7); porMes[k] = (porMes[k] || 0) + (tipo === '' ? m.valor : Math.abs(m.valor)); }
+    const nomeMesCurto = new Intl.DateTimeFormat('pt-BR', { month: 'short', year: '2-digit' });
+    document.getElementById('porMes').innerHTML = barras(Object.entries(porMes).sort((a, b) => b[0].localeCompare(a[0]))
+      .map(([k, v]) => { const [a, mm] = k.split('-').map(Number); return [nomeMesCurto.format(new Date(a, mm - 1, 1)).replace('.', ''), v]; }));
+
+    // Tabela
+    document.getElementById('contagem').textContent = lista.length
+      ? `${lista.length} movimentação(ões)${lista.length > limiteTabela ? ` · mostrando as ${limiteTabela} mais recentes` : ''}` : '';
+    document.getElementById('tabelaMais').hidden = lista.length <= limiteTabela;
+    document.getElementById('tabelaExtrato').innerHTML = lista.length ? lista.slice(0, limiteTabela).map(m => {
+      const f = fornecedorDe(m);
+      return `<tr>
         <td>${dataBR(m.data)}</td>
-        <td>${esc(m.descricao)}${m.lancId ? ' <small title="Conciliado com uma conta a pagar/receber">✔</small>' : ''}</td>
+        <td class="desc"><button type="button" class="link" data-fornecedor="${esc(f.nome)}" title="Ver só ${esc(f.nome)}">${esc(f.nome)}</button>
+          ${m.lancId ? ' <small title="Conciliado com uma conta a pagar/receber">✔</small>' : ''}
+          ${f.nome !== m.descricao ? `<span class="sub">${esc(m.descricao)}</span>` : ''}</td>
         <td><input class="cat-mov" data-mov="${m.id}" value="${esc(m.categoria)}" list="categorias" aria-label="Categoria"></td>
         <td>${esc(nomeConta(m.contaId))}</td>
         <td class="num ${m.valor > 0 ? 'pos' : 'neg'}">${brl.format(m.valor)}</td>
         <td><button class="mini perigo" data-excluir-mov="${m.id}">Excluir</button></td>
-      </tr>`).join('')
-      : '<tr><td colspan="6" class="vazio">Nenhuma movimentação. Importe o extrato do seu banco na aba “Contas e saldos”.</td></tr>';
+      </tr>`;
+    }).join('')
+      : `<tr><td colspan="6" class="vazio">${estado.movimentacoes.length ? 'Nenhuma movimentação com esses filtros.' : 'Nenhuma movimentação. Importe o extrato do seu banco na aba “Contas e saldos”.'}</td></tr>`;
+  }
+
+  function filtrarFornecedor(nome) {
+    document.getElementById('fBusca').value = nome;
+    limiteTabela = 200;
+    renderExtrato();
+    document.getElementById('tituloResumo').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function exportarCSV() {
+    const { lista } = filtrarExtrato();
+    const linhas = [['Data', 'Fornecedor/Cliente', 'Descrição', 'Categoria', 'Banco/Conta', 'Titular', 'Valor']];
+    for (const m of lista) {
+      const c = estado.contas.find(c => c.id === m.contaId);
+      linhas.push([dataBR(m.data), fornecedorDe(m).nome, m.descricao, m.categoria, c ? c.nome : '', c ? entidade(c.entidadeId).nome : '',
+        m.valor.toFixed(2).replace('.', ',')]);
+    }
+    const csv = '﻿' + linhas.map(l => l.map(v => /[;"\n]/.test(v) ? `"${String(v).replace(/"/g, '""')}"` : v).join(';')).join('\r\n');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+    const nome = normNome(document.getElementById('fBusca').value).replace(/ /g, '-');
+    a.download = `extrato${nome ? '-' + nome : ''}-${hoje()}.csv`;
+    a.click();
+    URL.revokeObjectURL(a.href);
   }
 
   // ---------- Formulários ----------
@@ -618,7 +838,7 @@
   document.getElementById('filtroEntidade').addEventListener('change', e => {
     filtroEnt = e.target.value;
     try { localStorage.setItem(CHAVE + ':titular', filtroEnt); } catch (err) { /* sem armazenamento */ }
-    document.getElementById('filtroExtratoConta').value = '';
+    document.getElementById('fBanco').value = '';
     render();
   });
 
@@ -643,6 +863,7 @@
       return;
     }
     if (d.desfazer) { desfazerPago(d.desfazer); return; }
+    if (d.fornecedor && b.classList.contains('link')) { filtrarFornecedor(d.fornecedor); return; }
     if (d.importar) {
       document.getElementById('contaImport').value = d.importar;
       document.getElementById('arquivoExtrato').click();
@@ -778,9 +999,18 @@
   });
 
   // ---------- Extrato ----------
-  document.getElementById('filtroExtratoMes').value = hoje().slice(0, 7);
-  document.getElementById('filtroExtratoConta').addEventListener('change', renderExtrato);
-  document.getElementById('filtroExtratoMes').addEventListener('change', renderExtrato);
+  const reExtrato = () => { limiteTabela = 200; limiteRanking = 10; renderExtrato(); };
+  ['fBanco', 'fTipo', 'fPeriodo', 'fDe', 'fAte', 'fInternas'].forEach(idEl => document.getElementById(idEl).addEventListener('change', reExtrato));
+  let tBusca = null;
+  document.getElementById('fBusca').addEventListener('input', () => { clearTimeout(tBusca); tBusca = setTimeout(reExtrato, 200); });
+  document.getElementById('fLimpar').addEventListener('click', () => { document.getElementById('fBusca').value = ''; reExtrato(); document.getElementById('fBusca').focus(); });
+  document.getElementById('rankingMais').addEventListener('click', () => { limiteRanking += 20; renderExtrato(); });
+  document.getElementById('tabelaMais').addEventListener('click', () => { limiteTabela += 300; renderExtrato(); });
+  document.getElementById('exportarCSV').addEventListener('click', exportarCSV);
+  document.getElementById('ranking').addEventListener('click', e => {
+    const li = e.target.closest('li[data-fornecedor]');
+    if (li) filtrarFornecedor(li.dataset.fornecedor);
+  });
   document.getElementById('tabelaExtrato').addEventListener('change', e => {
     const inp = e.target.closest('.cat-mov');
     if (!inp) return;

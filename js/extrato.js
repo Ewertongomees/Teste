@@ -343,7 +343,7 @@
   const MESES_EXT = ['janeiro', 'fevereiro', 'marco', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
   function lerPDFC6(paginas) {
     const transacoes = [];
-    let ano = '', titular = '', saldo = null, atual = null;
+    let ano = '', titular = '', saldo = null;
     paginas.forEach((itens, nPag) => {
       const linhas = agruparLinhas(itens);
       if (nPag === 0) {
@@ -355,28 +355,38 @@
           if (n) saldo = Math.round(valorCSV(n) * 100) / 100;
         }
       }
+      // Âncoras = linhas com data + valor. Textos soltos (descrição que quebrou acima/abaixo) vão para a âncora mais próxima.
+      const ancoras = [], soltos = [];
       for (const l of linhas) {
         const t = textoLinha(l);
         const mMes = normalizar(t).match(/^(janeiro|fevereiro|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)\s+(\d{4})/);
-        if (mMes) { ano = mMes[2]; atual = null; continue; }
-        if (/^Saldo cont[aá]bil|^Data\b|^da transa|^\d+\/\d+$|C6 Bank •|Sem lan[cç]amentos/i.test(t)) { atual = null; continue; }
+        if (mMes) { ano = mMes[2]; continue; }
+        if (/^Saldo cont[aá]bil|^Data\b|^da transa|^\d+\/\d+$|C6 Bank •|Sem lan[cç]amentos|^Entradas:|Per[ií]odo da Exporta/i.test(t)) continue;
         const it = l.itens;
         const ehData = s => /^\d{2}\/\d{2}$/.test(s);
         const valorIt = [...it].reverse().find(i => RE_NUM.test(i.str));
         if (it.length >= 3 && ehData(it[0].str) && valorIt && ano) {
           const [d, m] = it[0].str.split('/');
           const meio = it.filter(i => i !== it[0] && i !== valorIt && !(i === it[1] && ehData(i.str)));
-          const tipo = meio[0] ? meio[0].str : '';
-          const desc = meio.slice(1).map(i => i.str).join(' ');
-          atual = {
-            data: `${ano}-${m}-${d}`,
-            valor: Math.round(valorCSV(valorIt.str) * 100) / 100,
-            descricao: (!desc ? tipo : /pix/i.test(tipo) ? desc : `${tipo}: ${desc}`).replace(/\s+/g, ' ').trim()
-          };
-          transacoes.push(atual);
-        } else if (atual && !it.some(i => RE_NUM.test(i.str)) && t.length < 120) {
-          atual.descricao += ' ' + t.trim(); // descrição que quebrou de linha
+          const tipo = meio.length && meio[0].x < 200 ? meio[0].str : '';
+          const desc = meio.slice(tipo ? 1 : 0).map(i => i.str);
+          const tx = { data: `${ano}-${m}-${d}`, valor: Math.round(valorCSV(valorIt.str) * 100) / 100, tipo, partes: [{ y: l.y, txt: desc.join(' ') }] };
+          ancoras.push({ y: l.y, tx });
+          transacoes.push(tx);
+        } else if (ancoras.length || it.some(i => i.x > 150)) {
+          if (!it.some(i => RE_NUM.test(i.str)) && t.length < 160) soltos.push({ y: l.y, txt: t.trim() });
         }
+      }
+      for (const s of soltos) {
+        if (!ancoras.length) break;
+        const a = ancoras.reduce((m, a) => Math.abs(a.y - s.y) < Math.abs(m.y - s.y) ? a : m);
+        if (Math.abs(a.y - s.y) < 14) a.tx.partes.push(s);
+      }
+      for (const { tx } of ancoras) {
+        if (!tx.partes) continue;
+        const desc = tx.partes.sort((p, q) => q.y - p.y).map(p => p.txt).filter(Boolean).join(' ');
+        tx.descricao = (!desc ? tx.tipo : /pix/i.test(tx.tipo) ? desc : `${tx.tipo}: ${desc}`).replace(/\s+/g, ' ').trim() || 'Movimentação';
+        delete tx.partes; delete tx.tipo;
       }
     });
     if (!transacoes.length) throw new Error('Não encontrei movimentações neste PDF do C6.');
@@ -508,5 +518,24 @@
     return r ? r[1] : 'Outros';
   }
 
-  window.Extrato = { ler, categorizar, _interno: { lerOFX, lerCSV, valorCSV, dataCSV } };
+  // ---------- Fornecedor / cliente (contraparte) a partir da descrição ----------
+  const PREFIXOS = [
+    /^pix enviado para\s+/i, /^pix recebido (?:c6 )?de\s+/i, /^devol(?:u[cç][aã]o)? recebida pix de\s+/i,
+    /^(?:transfer[eê]ncia|reembolso) (?:enviada|recebida|recebido)(?: pelo pix)?\s*-\s*/i,
+    /^(?:pix enviado|pix recebido|pix qr code (?:dinamico|estatico|estatic)|devolucao pix|ted-transf elet dispon|pagto eletron cobranca|transfer[eê]ncia recebida)\s*-\s*/i,
+    /^pagamento de boleto efetuado\s*-\s*/i, /^compra no d[eé]bito\s*-\s*/i, /^(?:pagamento|d[eé]bito de cart[aã]o|outros gastos|transfer[eê]ncia)\s*:\s*/i,
+    /^pix recebido\s*-\s*(?:cp\s*:\s*\d+-)?/i
+  ];
+  function contraparte(descricao) {
+    let d = String(descricao || '').trim();
+    let achou = false;
+    for (const re of PREFIXOS) if (re.test(d)) { d = d.replace(re, ''); achou = true; break; }
+    if (!achou) return '';
+    d = d.replace(/^\d{2}\.\d{3}\.\d{3}\s+/, '')          // raiz de CNPJ antes do nome (C6)
+      .replace(/\s+-\s+.*$/, m => /^\s+-\s+(centro|sonografia|habitacao)/i.test(m) ? m : '') // descarta banco/agência
+      .replace(/\s+(BRA|BR)$/i, '').replace(/\s+/g, ' ').trim();
+    return d;
+  }
+
+  window.Extrato = { ler, categorizar, contraparte, _interno: { lerOFX, lerCSV, valorCSV, dataCSV } };
 })();

@@ -175,17 +175,69 @@
 
     <!-- EXTRATO -->
     <section id="extrato" class="secao">
-      <div class="filtros">
-        <select id="filtroExtratoConta"></select>
-        <input type="month" id="filtroExtratoMes" aria-label="Mês">
+      <div class="painel-bloco filtros-extrato">
+        <label class="busca-label">Fornecedor, cliente ou descrição
+          <span class="busca">
+            <input id="fBusca" list="listaContrapartes" placeholder="Digite um nome. Ex.: Atacadão, Casa do Construtor…" autocomplete="off">
+            <button type="button" id="fLimpar" class="mini secundario" hidden>Limpar</button>
+          </span>
+        </label>
+        <datalist id="listaContrapartes"></datalist>
+        <label>Banco / conta <select id="fBanco"></select></label>
+        <label>Movimento
+          <select id="fTipo">
+            <option value="saida">Pagamentos (saídas)</option>
+            <option value="entrada">Recebimentos (entradas)</option>
+            <option value="">Entradas e saídas</option>
+          </select>
+        </label>
+        <label>Período
+          <select id="fPeriodo">
+            <option value="tudo">Todo o período</option>
+            <option value="mes">Este mês</option>
+            <option value="mesPassado">Mês passado</option>
+            <option value="3m">Últimos 3 meses</option>
+            <option value="ano">Este ano</option>
+            <option value="12m">Últimos 12 meses</option>
+            <option value="custom">Escolher datas…</option>
+          </select>
+        </label>
+        <label class="datas" hidden>De <input type="date" id="fDe"></label>
+        <label class="datas" hidden>Até <input type="date" id="fAte"></label>
+        <label class="check-linha"><input type="checkbox" id="fInternas"> Incluir transferências entre minhas contas</label>
       </div>
-      <p id="resumoExtrato" class="resumo"></p>
+
+      <h2 id="tituloResumo" class="titulo-resumo"></h2>
+      <div id="resumoCartoes" class="cartoes"></div>
+
+      <div class="grade">
+        <div class="painel-bloco">
+          <h2 id="tituloRanking">Para quem você mais pagou</h2>
+          <p class="dica">Clique num nome para ver só os pagamentos dele.</p>
+          <ol id="ranking" class="lista ranking"></ol>
+          <button type="button" id="rankingMais" class="mini secundario" hidden>Ver mais</button>
+        </div>
+        <div class="painel-bloco">
+          <h2>Por banco</h2>
+          <div id="porBanco"></div>
+        </div>
+        <div class="painel-bloco">
+          <h2>Por mês</h2>
+          <div id="porMes"></div>
+        </div>
+      </div>
+
+      <div class="barra-tabela">
+        <span id="contagem" class="resumo"></span>
+        <button type="button" id="exportarCSV" class="mini secundario">Exportar para planilha (CSV)</button>
+      </div>
       <div class="tabela-wrap">
         <table>
-          <thead><tr><th>Data</th><th>Descrição</th><th>Categoria</th><th>Conta</th><th class="num">Valor</th><th></th></tr></thead>
+          <thead><tr><th>Data</th><th>Fornecedor / descrição</th><th>Categoria</th><th>Banco</th><th class="num">Valor</th><th></th></tr></thead>
           <tbody id="tabelaExtrato"></tbody>
         </table>
       </div>
+      <button type="button" id="tabelaMais" class="mini secundario mais" hidden>Mostrar mais</button>
     </section>
 
     <!-- DADOS -->

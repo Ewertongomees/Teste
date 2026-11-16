@@ -151,3 +151,31 @@ label.ver select { width: auto; max-width: 70vw; }
 .formulario.embutido { border: 0; padding: 12px 0 0; margin: 0; }
 .formulario .largo { grid-column: 1 / -1; }
 textarea { font: inherit; width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--borda); background: var(--fundo); color: var(--texto); resize: vertical; }
+
+.filtros-extrato { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.filtros-extrato label { font-size: .85rem; color: var(--suave); display: flex; flex-direction: column; gap: 4px; }
+.filtros-extrato .busca-label { grid-column: 1 / -1; }
+.busca { display: flex; gap: 8px; }
+.busca input { flex: 1; font-size: 1rem; padding: 10px 12px; }
+.titulo-resumo { font-size: 1.05rem; margin: 0 0 8px; }
+.titulo-resumo small { color: var(--suave); font-weight: 400; }
+.cartao small { display: block; color: var(--suave); font-size: .8rem; margin-top: 2px; }
+.ranking { counter-reset: r; }
+.ranking li { cursor: pointer; }
+.ranking li:hover .nome { color: var(--primaria); text-decoration: underline; }
+.ranking .nome { overflow-wrap: anywhere; }
+.link { background: none; border: 0; padding: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.link:hover { color: var(--primaria); text-decoration: underline; }
+td .sub { display: block; color: var(--suave); font-size: .8rem; white-space: normal; max-width: 420px; }
+td.desc { white-space: normal; min-width: 220px; }
+.barra-tabela { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 16px 0 8px; flex-wrap: wrap; }
+.mais { margin-top: 8px; }
+.grade + .barra-tabela { margin-top: 16px; }
+#resumoCartoes { margin-bottom: 16px; }
+.filtros-extrato .check-linha { grid-column: 1 / -1; flex-direction: row; align-items: center; gap: 8px; }
+.filtros-extrato .check-linha input { width: auto; }
+@media (max-width: 600px) {
+  #resumoCartoes { grid-template-columns: 1fr 1fr; gap: 8px; }
+  #resumoCartoes .cartao { padding: 10px 12px; }
+  #resumoCartoes .cartao strong { font-size: 1.1rem; }
+}
