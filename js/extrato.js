@@ -172,26 +172,39 @@
   // ---------- PDF (extratos em tabela: Data | Histórico | Docto | Crédito | Débito | Saldo) ----------
   const PDFJS = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/';
   let pdfjsPromise = null;
+  function carregarScript(src) {
+    return new Promise((ok, falha) => {
+      const s = document.createElement('script');
+      s.src = src;
+      s.onload = ok;
+      s.onerror = () => falha(new Error('Não consegui baixar o leitor de PDF (' + src.split('/').pop() + '). Verifique a internet e tente de novo.'));
+      document.head.appendChild(s);
+    });
+  }
+  // Carrega o pdf.js e o "worker" dele na própria página (sem Web Worker de outro domínio,
+  // que alguns navegadores e páginas protegidas bloqueiam).
   function carregarPdfJs() {
-    if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+    if (window.pdfjsLib && window.pdfjsWorker) return Promise.resolve(window.pdfjsLib);
     if (!pdfjsPromise) {
-      pdfjsPromise = new Promise((ok, falha) => {
-        const s = document.createElement('script');
-        s.src = PDFJS + 'pdf.min.js';
-        s.onload = () => {
-          window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS + 'pdf.worker.min.js';
-          ok(window.pdfjsLib);
-        };
-        s.onerror = () => { pdfjsPromise = null; falha(new Error('Não consegui carregar o leitor de PDF. Verifique a internet e tente de novo.')); };
-        document.head.appendChild(s);
-      });
+      pdfjsPromise = (async () => {
+        if (!window.pdfjsLib) await carregarScript(PDFJS + 'pdf.min.js');
+        if (!window.pdfjsWorker) await carregarScript(PDFJS + 'pdf.worker.min.js');
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS + 'pdf.worker.min.js';
+        return window.pdfjsLib;
+      })().catch(e => { pdfjsPromise = null; throw e; });
     }
     return pdfjsPromise;
   }
 
   async function lerPDF(arquivo) {
     const pdfjs = await carregarPdfJs();
-    const doc = await pdfjs.getDocument({ data: new Uint8Array(await arquivo.arrayBuffer()) }).promise;
+    let doc;
+    try {
+      doc = await pdfjs.getDocument({ data: new Uint8Array(await arquivo.arrayBuffer()), isEvalSupported: false }).promise;
+    } catch (e) {
+      throw new Error(/password/i.test(e && e.name || '') ? 'Este PDF tem senha. Exporte o extrato sem senha e tente de novo.'
+        : 'Não consegui abrir este PDF (' + ((e && e.message) || 'erro desconhecido') + ').');
+    }
     const paginas = [];
     for (let n = 1; n <= doc.numPages; n++) {
       const pag = await doc.getPage(n);

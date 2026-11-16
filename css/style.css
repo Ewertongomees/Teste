@@ -179,3 +179,10 @@ td.desc { white-space: normal; min-width: 220px; }
   #resumoCartoes .cartao { padding: 10px 12px; }
   #resumoCartoes .cartao strong { font-size: 1.1rem; }
 }
+
+.aviso { border-color: var(--primaria); margin-bottom: 16px; }
+.aviso p { margin: 0 0 12px; }
+.status { background: var(--superficie); border: 1px solid var(--borda); border-radius: 12px; padding: 12px 16px; margin-bottom: 16px; line-height: 1.6; overflow-wrap: anywhere; }
+.status.ok { border-color: var(--pos); }
+.status.erro { border-color: var(--perigo); }
+.status .link, .msg .link { color: var(--primaria); text-decoration: underline; }

@@ -22,6 +22,17 @@
   </header>
 
   <main>
+    <div id="semDados" class="painel-bloco aviso" hidden>
+      <h2>Seus extratos ainda não estão neste aplicativo</h2>
+      <p>Os dados ficam guardados só neste navegador. Para começar, importe os extratos dos seus bancos (pode escolher
+        <strong>vários PDFs de uma vez</strong>) ou carregue um arquivo de backup.</p>
+      <div class="acoes">
+        <button type="button" data-abrir-import>Importar extratos (PDF, OFX ou CSV)</button>
+        <button type="button" class="secundario" data-abrir-backup>Carregar backup (.json)</button>
+      </div>
+    </div>
+    <div id="statusImport" class="status" hidden aria-live="polite"></div>
+    <input type="file" id="arquivoRapido" accept=".ofx,.qfx,.csv,.txt,.pdf,text/csv,application/x-ofx,application/pdf" multiple hidden>
     <!-- PAINEL -->
     <section id="painel" class="secao ativa">
       <div class="seletor-mes">
@@ -138,8 +149,8 @@
         </ul>
         <div class="acoes">
           <label class="inline">Conta <select id="contaImport"></select></label>
-          <label class="botao">Escolher arquivo do extrato
-            <input type="file" id="arquivoExtrato" accept=".ofx,.qfx,.csv,.txt,.pdf,text/csv,application/x-ofx,application/pdf" hidden>
+          <label class="botao">Escolher arquivo(s) do extrato
+            <input type="file" id="arquivoExtrato" accept=".ofx,.qfx,.csv,.txt,.pdf,text/csv,application/x-ofx,application/pdf" multiple hidden>
           </label>
         </div>
         <p id="msgImport" class="msg" aria-live="polite"></p>

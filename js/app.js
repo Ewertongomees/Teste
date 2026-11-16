@@ -219,7 +219,8 @@
     if (!conta && !(r.info && r.info.titular) && estado.contas.length) {
       throw new Error('Este arquivo não diz de quem é a conta. Escolha a conta na lista “Conta” e importe de novo.');
     }
-    if (!conta) conta = contaAutomatica(r.info || {});
+    let contaNova = false;
+    if (!conta) { const n = estado.contas.length; conta = contaAutomatica(r.info || {}); contaNova = estado.contas.length > n; }
     contaId = conta.id;
     const nomes = nomesProprios();
 
@@ -256,7 +257,10 @@
 
     // Atualização do saldo
     let msgSaldo = '';
-    if (r.saldo !== null) {
+    if (r.saldo !== null && contaNova) {
+      conta.saldo = r.saldo; // conta criada agora: o saldo é o informado pelo banco
+      msgSaldo = ` Saldo: ${brl.format(r.saldo)}.`;
+    } else if (r.saldo !== null) {
       if (Math.abs(r.saldo - conta.saldo) >= 0.01 &&
           confirm(`O banco informou saldo de ${brl.format(r.saldo)}${r.dataSaldo ? ' em ' + dataBR(r.dataSaldo) : ''}.\n` +
                   `O saldo cadastrado de "${conta.nome}" é ${brl.format(conta.saldo)}.\n\nAtualizar para o saldo do banco?`)) {
@@ -286,6 +290,7 @@
 
   // ---------- Renderização ----------
   function render() {
+    document.getElementById('semDados').hidden = estado.movimentacoes.length > 0;
     renderFiltroEnt();
     renderEntidades();
     renderPainel();
@@ -1026,21 +1031,50 @@
     salvar();
   });
 
-  document.getElementById('arquivoExtrato').addEventListener('change', async e => {
-    const arq = e.target.files[0];
-    const msg = document.getElementById('msgImport');
-    if (!arq) return;
-    msg.className = 'msg';
-    msg.textContent = 'Lendo extrato…';
-    try {
-      msg.textContent = await importarExtrato(document.getElementById('contaImport').value, arq);
-      msg.className = 'msg ok';
-    } catch (err) {
-      msg.textContent = err.message || 'Não foi possível ler o arquivo.';
-      msg.className = 'msg erro';
-    } finally {
-      e.target.value = '';
+  // Importa um ou vários arquivos (PDF/OFX/CSV) em sequência, mostrando o andamento
+  async function importarArquivos(arquivos, contaId, elMsg) {
+    const status = document.getElementById('statusImport');
+    const lista = [...arquivos];
+    if (!lista.length) return;
+    const linhas = [];
+    const mostrar = (txt, cls) => {
+      for (const el of [elMsg, status]) {
+        if (!el) continue;
+        el.hidden = false;
+        el.className = (el === status ? 'status ' : 'msg ') + (cls || '');
+        el.innerHTML = txt;
+      }
+    };
+    let ok = 0;
+    for (const [n, arq] of lista.entries()) {
+      mostrar(`Lendo ${esc(arq.name)} (${n + 1} de ${lista.length})…` + (linhas.length ? '<br>' + linhas.join('<br>') : ''));
+      try {
+        linhas.push('✔ ' + esc(arq.name) + ': ' + esc(await importarExtrato(contaId, arq)));
+        ok++;
+      } catch (err) {
+        linhas.push('✖ ' + esc(arq.name) + ': ' + esc(err.message || 'não foi possível ler o arquivo.'));
+      }
     }
+    mostrar(`<strong>Importação concluída: ${ok} de ${lista.length} arquivo(s).</strong><br>` + linhas.join('<br>') +
+      (ok ? '<br>Veja em <button type="button" class="link" data-aba-ir="painel">Painel</button> e <button type="button" class="link" data-aba-ir="extrato">Extrato</button>.' : ''),
+      ok === lista.length ? 'ok' : 'erro');
+  }
+
+  document.getElementById('arquivoExtrato').addEventListener('change', async e => {
+    try { await importarArquivos(e.target.files, document.getElementById('contaImport').value, document.getElementById('msgImport')); }
+    finally { e.target.value = ''; }
+  });
+  document.getElementById('arquivoRapido').addEventListener('change', async e => {
+    try { await importarArquivos(e.target.files, '__auto', null); }
+    finally { e.target.value = ''; }
+  });
+  document.addEventListener('click', e => {
+    const b = e.target.closest('[data-abrir-import], [data-abrir-backup], [data-aba-ir], #fecharStatus');
+    if (!b) return;
+    if (b.id === 'fecharStatus') { document.getElementById('statusImport').hidden = true; return; }
+    if (b.dataset.abrirImport !== undefined) document.getElementById('arquivoRapido').click();
+    if (b.dataset.abrirBackup !== undefined) document.getElementById('importar').click();
+    if (b.dataset.abaIr) document.querySelector(`.aba[data-aba="${b.dataset.abaIr}"]`).click();
   });
 
   render();
