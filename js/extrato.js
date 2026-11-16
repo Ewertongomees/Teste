@@ -196,17 +196,33 @@
     for (let n = 1; n <= doc.numPages; n++) {
       const pag = await doc.getPage(n);
       const conteudo = await pag.getTextContent();
-      paginas.push(conteudo.items
-        .filter(i => i.str && i.str.trim())
-        .map(i => ({ str: i.str.trim(), x: i.transform[4], y: i.transform[5], w: i.width })));
+      const brutos = conteudo.items.filter(i => i.str).map(i => ({ str: i.str, x: i.transform[4], y: i.transform[5], w: i.width }));
+      paginas.push(juntarLetras(brutos).map(i => ({ ...i, str: i.str.trim() })).filter(i => i.str));
     }
     return interpretarPDF(paginas);
+  }
+
+  // Alguns bancos (ex.: C6) gravam o PDF letra por letra; junta as letras vizinhas em palavras/frases
+  function juntarLetras(itens) {
+    const curtos = itens.filter(i => i.str.length <= 1).length;
+    if (curtos < itens.length * 0.5) return itens;
+    const ord = [...itens].sort((a, b) => (Math.abs(a.y - b.y) < 1 ? a.x - b.x : b.y - a.y));
+    const out = [];
+    for (const it of ord) {
+      const ult = out[out.length - 1];
+      if (ult && Math.abs(ult.y - it.y) < 1 && it.x - (ult.x + ult.w) < 3) {
+        ult.str += it.str;
+        ult.w = it.x + it.w - ult.x;
+      } else out.push({ ...it });
+    }
+    return out;
   }
 
   // Escolhe o leitor conforme o layout do banco
   function interpretarPDF(paginas) {
     const texto = paginas.map(p => p.map(i => i.str).join(' ')).join(' ');
     const r = /Saldo por transa/i.test(texto) ? lerPDFInter(paginas)
+      : /C6 Bank/i.test(texto) && /Saldo cont[aá]bil do dia|da transa[cç][aã]o/i.test(texto) ? lerPDFC6(paginas)
       : /Total de entradas/i.test(texto) && /Saldo do dia/i.test(texto) ? lerPDFNubank(paginas)
       : interpretarPaginasPDF(paginas);
     r.info = Object.assign({ banco: '', titular: '' }, r.info || {});
@@ -323,6 +339,50 @@
     if (!transacoes.length) throw new Error('Não encontrei movimentações neste PDF do Nubank.');
     return { transacoes: comIdsEstaveis(transacoes), saldo, dataSaldo, info: { banco: 'Nubank', titular } };
   }
+  // C6 Bank: mês "Janeiro 2026 (01/01/2026 - 31/01/2026)", linhas "dd/mm  dd/mm  Tipo  Descrição  -R$ valor"
+  const MESES_EXT = ['janeiro', 'fevereiro', 'marco', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
+  function lerPDFC6(paginas) {
+    const transacoes = [];
+    let ano = '', titular = '', saldo = null, atual = null;
+    paginas.forEach((itens, nPag) => {
+      const linhas = agruparLinhas(itens);
+      if (nPag === 0) {
+        const lt = linhas.find(l => /•\s*(CNPJ|CPF)/i.test(textoLinha(l)));
+        if (lt) titular = textoLinha(lt).split('•')[0].trim();
+        const iS = linhas.findIndex(l => /Saldo no dia da exporta/i.test(textoLinha(l)));
+        if (iS >= 0 && linhas[iS + 1]) {
+          const n = l2num(linhas[iS + 1]) || l2num(linhas[iS]);
+          if (n) saldo = Math.round(valorCSV(n) * 100) / 100;
+        }
+      }
+      for (const l of linhas) {
+        const t = textoLinha(l);
+        const mMes = normalizar(t).match(/^(janeiro|fevereiro|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)\s+(\d{4})/);
+        if (mMes) { ano = mMes[2]; atual = null; continue; }
+        if (/^Saldo cont[aá]bil|^Data\b|^da transa|^\d+\/\d+$|C6 Bank •|Sem lan[cç]amentos/i.test(t)) { atual = null; continue; }
+        const it = l.itens;
+        const ehData = s => /^\d{2}\/\d{2}$/.test(s);
+        const valorIt = [...it].reverse().find(i => RE_NUM.test(i.str));
+        if (it.length >= 3 && ehData(it[0].str) && valorIt && ano) {
+          const [d, m] = it[0].str.split('/');
+          const meio = it.filter(i => i !== it[0] && i !== valorIt && !(i === it[1] && ehData(i.str)));
+          const tipo = meio[0] ? meio[0].str : '';
+          const desc = meio.slice(1).map(i => i.str).join(' ');
+          atual = {
+            data: `${ano}-${m}-${d}`,
+            valor: Math.round(valorCSV(valorIt.str) * 100) / 100,
+            descricao: (!desc ? tipo : /pix/i.test(tipo) ? desc : `${tipo}: ${desc}`).replace(/\s+/g, ' ').trim()
+          };
+          transacoes.push(atual);
+        } else if (atual && !it.some(i => RE_NUM.test(i.str)) && t.length < 120) {
+          atual.descricao += ' ' + t.trim(); // descrição que quebrou de linha
+        }
+      }
+    });
+    if (!transacoes.length) throw new Error('Não encontrei movimentações neste PDF do C6.');
+    return { transacoes: comIdsEstaveis(transacoes), saldo, dataSaldo: transacoes[transacoes.length - 1].data, info: { banco: 'C6', titular } };
+  }
+
   function l2num(l) { const n = [...l.itens].reverse().find(i => RE_NUM.test(i.str)); return n ? n.str : ''; }
 
   const RE_NUM = /^-?\(?(R\$\s?)?-?\d{1,3}(\.\d{3})*,\d{2}\)?\s*[DC-]?$|^-?\d+,\d{2}$/;
