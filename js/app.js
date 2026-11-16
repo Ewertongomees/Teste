@@ -874,6 +874,107 @@
       : `<tr><td colspan="6" class="vazio">${estado.movimentacoes.length ? 'Nenhuma movimentação com esses filtros.' : 'Nenhuma movimentação. Importe o extrato do seu banco na aba “Contas e saldos”.'}</td></tr>`;
   }
 
+  // ---------- Imprimir (gera PDF pronto para imprimir) ----------
+  const txt = el => (el ? el.textContent : '').replace(/\s+/g, ' ').trim();
+  const lerCartoes = sel => [...document.querySelectorAll(sel + ' .cartao')].map(c =>
+    [txt(c.querySelector('span')), txt(c.querySelector('strong')) + (txt(c.querySelector('small')) ? '  (' + txt(c.querySelector('small')) + ')' : '')]);
+  const lerBarras = sel => [...document.querySelectorAll(sel + ' .barra .rotulo')].map(r => [...r.children].map(txt));
+  const verTxt = () => { const s = document.getElementById('filtroEntidade'); return s.options[s.selectedIndex] ? s.options[s.selectedIndex].text : 'Tudo'; };
+
+  async function imprimir(rel, nomeArquivo, botao) {
+    const rotulo = botao ? botao.textContent : '';
+    if (botao) { botao.disabled = true; botao.textContent = 'Gerando PDF…'; }
+    try {
+      const blob = await window.Impressao.gerarPDF(rel);
+      const dentroDoClaude = window.top !== window;
+      if (!dentroDoClaude) {
+        const url = URL.createObjectURL(blob);
+        const w = window.open(url, '_blank'); // abre no leitor de PDF, que já pede para imprimir
+        if (w) { setTimeout(() => URL.revokeObjectURL(url), 120000); return; }
+      }
+      await baixar(nomeArquivo, blob, 'application/pdf');
+    } catch (e) {
+      avisar((e && e.message) || 'Não foi possível gerar o PDF.');
+    } finally {
+      if (botao) { botao.disabled = false; botao.textContent = rotulo; }
+    }
+  }
+
+  function relatorioExtrato() {
+    renderExtrato();
+    const { lista, chaveBusca, busca, tipo } = filtrarExtrato();
+    const selB = document.getElementById('fBanco'), selP = document.getElementById('fPeriodo'), selT = document.getElementById('fTipo');
+    const bancoTxt = selB.value ? selB.options[selB.selectedIndex].text.replace(/ · \d+ conta\(s\)$/, '') : 'Todos os bancos';
+    const datas = lista.map(m => m.data).sort();
+    let periodo = selP.options[selP.selectedIndex].text;
+    if (selP.value === 'custom') periodo = `${document.getElementById('fDe').value ? dataBR(document.getElementById('fDe').value) : 'início'} a ${document.getElementById('fAte').value ? dataBR(document.getElementById('fAte').value) : 'hoje'}`;
+    const g = gruposContraparte();
+    const nome = chaveBusca ? Object.values(g.mapa).find(x => x.chave === chaveBusca).nome : busca;
+    const secoes = [{ titulo: 'Resumo', pares: lerCartoes('#resumoCartoes') }];
+    const porBanco = lerBarras('#porBanco'), porMes = lerBarras('#porMes');
+    if (porBanco.length > 1) secoes.push({ titulo: 'Por banco / conta', tabela: { cab: ['Banco / conta', 'Valor'], linhas: porBanco, direita: [1], colorir: false } });
+    if (porMes.length > 1) secoes.push({ titulo: 'Por mês', tabela: { cab: ['Mês', 'Valor'], linhas: porMes, direita: [1], colorir: false } });
+    if (!chaveBusca) {
+      const itens = [...document.querySelectorAll('#ranking li[data-fornecedor]')];
+      const base = tipo === 'entrada' ? lista.filter(m => m.valor > 0) : lista.filter(m => m.valor < 0);
+      const rank = {};
+      for (const m of base) { const f = fornecedorDe(m); const k = f.chave || f.nome; const r = rank[k] || (rank[k] = { nome: f.nome, total: 0, n: 0 }); r.total += Math.abs(m.valor); r.n++; }
+      const lr = Object.values(rank).sort((a, b) => b.total - a.total).slice(0, 30);
+      if (lr.length && itens.length) secoes.push({ titulo: tipo === 'entrada' ? 'De quem você mais recebeu' : 'Para quem você mais pagou (30 maiores)',
+        tabela: { cab: ['#', 'Nome', 'Vezes', 'Total'], linhas: lr.map((r, i) => [String(i + 1), r.nome, String(r.n), brl.format(r.total)]), direita: [2, 3], larguras: { 0: 10 }, colorir: false } });
+    }
+    const total = lista.reduce((s, m) => s + m.valor, 0);
+    secoes.push({ titulo: `Movimentações (${lista.length})`, tabela: {
+      cab: ['Data', 'Fornecedor / cliente', 'Descrição no banco', 'Banco / conta', 'Categoria', 'Valor'],
+      linhas: lista.map(m => { const f = fornecedorDe(m); return [dataBR(m.data), f.nome, f.nome === m.descricao ? '' : m.descricao, nomeConta(m.contaId), m.categoria || '', brl.format(m.valor)]; }),
+      rodape: ['', '', '', '', 'Total', brl.format(total)],
+      direita: [5], larguras: { 0: 20, 5: 28 }
+    } });
+    return {
+      titulo: nome ? `Extrato: ${nome}` : 'Extrato',
+      subtitulo: [
+        `Movimento: ${selT.options[selT.selectedIndex].text}  |  Banco: ${bancoTxt}  |  Período: ${periodo}${datas.length ? ` (${dataBR(datas[0])} a ${dataBR(datas[datas.length - 1])})` : ''}`,
+        `Titular: ${verTxt()}${busca && !chaveBusca ? `  |  Busca: "${busca}"` : ''}`
+      ],
+      secoes
+    };
+  }
+
+  function relatorioPainel() {
+    renderPainel();
+    const secoes = [{ titulo: 'Resumo do mês', pares: lerCartoes('#painel .cartoes') }];
+    const linhas = [];
+    const visiveis = contasVisiveis();
+    for (const e of estado.entidades) {
+      const cs = visiveis.filter(c => c.entidadeId === e.id);
+      if (!cs.length) continue;
+      const tot = cs.reduce((s, c) => s + c.saldo, 0);
+      const parte = e.tipo === 'sociedade' && Number.isFinite(e.participacao) ? ` - sua parte (${String(e.participacao).replace('.', ',')}%): ${brl.format(tot * e.participacao / 100)}` : '';
+      linhas.push([`${e.nome}${e.tipo === 'pessoal' ? '' : ' (' + TIPOS_ENT[e.tipo] + ')'}${parte}`, '', brl.format(tot)]);
+      cs.forEach(c => linhas.push(['', c.nome, brl.format(c.saldo)]));
+    }
+    if (linhas.length) secoes.push({ titulo: 'Saldo por titular e conta', tabela: { cab: ['Titular', 'Conta', 'Saldo'], linhas, direita: [2],
+      rodape: ['', 'Total', brl.format(saldoTotal())] } });
+    const cats = lerBarras('#graficoCategorias');
+    if (cats.length) secoes.push({ titulo: 'Despesas do mês por categoria', tabela: { cab: ['Categoria', 'Valor'], linhas: cats, direita: [1], colorir: false } });
+    const prox = lancVisiveis().filter(l => !l.pago).sort((a, b) => a.vencimento.localeCompare(b.vencimento));
+    if (prox.length) secoes.push({ titulo: 'Contas pendentes', tabela: { cab: ['Vencimento', 'Descrição', 'Situação', 'Valor'],
+      linhas: prox.map(l => [dataBR(l.vencimento), l.descricao, statusTexto(l), (l.tipo === 'receber' ? '' : '-') + brl.format(l.valor)]), direita: [3] } });
+    return { titulo: 'Panorama Financeiro: ' + txt(document.getElementById('mesAtual')), subtitulo: [`Titular: ${verTxt()}`], secoes };
+  }
+
+  function relatorioLancamentos() {
+    renderLancamentos();
+    const sSt = document.getElementById('filtroStatus'), sTp = document.getElementById('filtroTipo');
+    const linhas = [...document.querySelectorAll('#tabelaLanc tr')].filter(tr => tr.children.length > 1)
+      .map(tr => [...tr.children].slice(0, 6).map(td => txt(td).replace(/🔁/g, '(mensal)')));
+    return {
+      titulo: 'Contas a pagar e a receber',
+      subtitulo: [`Situação: ${sSt.options[sSt.selectedIndex].text}  |  Tipo: ${sTp.options[sTp.selectedIndex].text}  |  Titular: ${verTxt()}`],
+      secoes: [{ titulo: `${linhas.length} lançamento(s)`, tabela: { cab: ['Vencimento', 'Descrição', 'Categoria', 'Conta', 'Valor', 'Situação'], linhas, direita: [4] } }]
+    };
+  }
+
   function filtrarFornecedor(nome) {
     document.getElementById('fBusca').value = nome;
     limiteTabela = 200;
@@ -1169,6 +1270,13 @@
   document.getElementById('rankingMais').addEventListener('click', () => { limiteRanking += 20; renderExtrato(); });
   document.getElementById('tabelaMais').addEventListener('click', () => { limiteTabela += 300; renderExtrato(); });
   document.getElementById('exportarCSV').addEventListener('click', exportarCSV);
+  const nomeArq = base => `${base}-${hoje()}.pdf`;
+  document.getElementById('imprimirExtrato').addEventListener('click', e => {
+    const nome = normNome(document.getElementById('fBusca').value).replace(/ /g, '-');
+    imprimir(relatorioExtrato(), nomeArq('extrato' + (nome ? '-' + nome : '')), e.currentTarget);
+  });
+  document.getElementById('imprimirPainel').addEventListener('click', e => imprimir(relatorioPainel(), nomeArq('panorama-' + mesVisto), e.currentTarget));
+  document.getElementById('imprimirLanc').addEventListener('click', e => imprimir(relatorioLancamentos(), nomeArq('contas-a-pagar'), e.currentTarget));
   document.getElementById('ranking').addEventListener('click', e => {
     const li = e.target.closest('li[data-fornecedor]');
     if (li) filtrarFornecedor(li.dataset.fornecedor);

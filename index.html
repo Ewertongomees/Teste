@@ -42,6 +42,7 @@
         <button id="mesAnterior" aria-label="Mês anterior">‹</button>
         <strong id="mesAtual"></strong>
         <button id="mesProximo" aria-label="Próximo mês">›</button>
+        <button type="button" id="imprimirPainel" class="mini secundario imprimir">🖨 Imprimir</button>
       </div>
 
       <div class="cartoes">
@@ -105,6 +106,7 @@
           <option value="pagar">A pagar</option>
           <option value="receber">A receber</option>
         </select>
+        <button type="button" id="imprimirLanc" class="mini secundario imprimir">🖨 Imprimir</button>
       </div>
       <div class="tabela-wrap">
         <table>
@@ -243,7 +245,10 @@
 
       <div class="barra-tabela">
         <span id="contagem" class="resumo"></span>
-        <button type="button" id="exportarCSV" class="mini secundario">Exportar para planilha (CSV)</button>
+        <span class="acoes">
+          <button type="button" id="imprimirExtrato" class="mini imprimir">🖨 Imprimir relatório</button>
+          <button type="button" id="exportarCSV" class="mini secundario">Exportar para planilha (CSV)</button>
+        </span>
       </div>
       <div class="tabela-wrap">
         <table>
@@ -270,6 +275,7 @@
   </main>
 
   <script src="js/extrato.js"></script>
+  <script src="js/imprimir.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

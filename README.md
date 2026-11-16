@@ -17,6 +17,7 @@ Publicado no claude.ai, o app guarda os dados numa área privada da sua conta (s
 - **Titulares (pessoal, minha empresa, sociedade)**: cada conta pertence a um titular. O seletor **Ver** no topo mostra o panorama de um titular ou de tudo junto. Em sociedades, informe sua participação (%) para ver a sua parte do saldo. PIX entre titulares seus viram "Entre minhas contas" e não contam como gasto na visão geral.
 - **Detecção automática**: ao importar um PDF, o app reconhece banco e titular (pessoa ou empresa) e cria a conta e o titular sozinho. Leitores de PDF testados: Bradesco, Banco Inter, Nubank (PF/PJ) e C6 Bank (PJ).
 - **Extrato com busca por fornecedor/cliente**: digite um nome (com sugestões tiradas dos extratos) e veja o resumo de todos os pagamentos a ele: total pago, quantidade, média, maior pagamento, primeiro/último, divisão por banco e por mês. Filtre por banco (todas as contas de um banco ou uma conta específica), tipo (pagamentos/recebimentos) e período. Ranking de "para quem você mais pagou" com clique para filtrar, e exportação do resultado para planilha (CSV). Variações do mesmo nome (maiúsculas, LTDA/ME, nomes cortados pelo banco) são agrupadas.
+- **Imprimir**: Painel, Contas a pagar e Extrato (o relatório do filtro atual, por exemplo um fornecedor) geram um PDF pronto para imprimir, com resumo, divisão por banco e por mês e a lista de movimentações. Dentro do claude.ai o PDF é salvo (a impressão direta é bloqueada ali); fora dele abre no leitor de PDF.
 - **Dados**: exportar, importar, carregar dados de exemplo e apagar tudo.
 
 ## Estrutura
@@ -26,4 +27,5 @@ index.html      # páginas e formulários
 css/style.css   # visual (tema claro/escuro automático)
 js/app.js       # lógica do app
 js/extrato.js   # leitura de extratos OFX/CSV/PDF e categorização automática
+js/imprimir.js  # relatórios em PDF para imprimir
 ```
