@@ -186,3 +186,13 @@ td.desc { white-space: normal; min-width: 220px; }
 .status.ok { border-color: var(--pos); }
 .status.erro { border-color: var(--perigo); }
 .status .link, .msg .link { color: var(--primaria); text-decoration: underline; }
+
+.topo-dir { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.status-nuvem { font-size: .8rem; color: var(--suave); white-space: nowrap; }
+.status-nuvem.ok { color: var(--pos); }
+.status-nuvem.erro, .status-nuvem.indisponivel { color: var(--neg); }
+.modal-fundo { position: fixed; inset: 0; background: rgba(0, 0, 0, .45); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 50; }
+.modal { background: var(--superficie); color: var(--texto); border-radius: 14px; padding: 20px; max-width: 440px; width: 100%; box-shadow: 0 10px 40px rgba(0, 0, 0, .3); }
+.modal-msg { white-space: pre-line; margin: 0 0 16px; line-height: 1.5; }
+.modal-campo { margin-bottom: 16px; }
+.modal .acoes { justify-content: flex-end; }

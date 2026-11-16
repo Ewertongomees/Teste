@@ -6,7 +6,7 @@ Aplicativo web simples para ter um panorama geral da vida financeira: contas ban
 
 Abra o arquivo `index.html` no navegador. Não precisa instalar nada nem ter servidor.
 
-Os dados ficam salvos no próprio navegador (localStorage). Use a aba **Dados** para exportar/importar um backup em JSON.
+Publicado no claude.ai, o app guarda os dados numa área privada da sua conta (só você vê) e eles aparecem em qualquer aparelho; o navegador guarda uma cópia rápida. Aberto como arquivo local, usa só o armazenamento do navegador. Use a aba **Dados** para exportar/importar um backup em JSON.
 
 ## Funcionalidades
 

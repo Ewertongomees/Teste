@@ -1,4 +1,5 @@
-// Panorama Financeiro — tudo roda no navegador e fica salvo no localStorage.
+// Panorama Financeiro — roda no navegador; os dados ficam na sua conta do claude.ai (área privada)
+// e, como cópia rápida, no armazenamento do navegador.
 (function () {
   'use strict';
 
@@ -40,10 +41,167 @@
   }
 
   function salvar() {
-    try { localStorage.setItem(CHAVE, JSON.stringify(estado)); } catch (e) {
-      alert('Não foi possível salvar os dados neste navegador.');
-    }
+    estado.atualizadoEm = new Date().toISOString();
+    try { localStorage.setItem(CHAVE, JSON.stringify(estado)); } catch (e) { /* navegador sem armazenamento: a conta guarda */ }
+    agendarNuvem();
     render();
+  }
+
+  // ---------- Armazenamento na sua conta do claude.ai ----------
+  // Área privada data/users/<seu id>: só você lê e grava. As movimentações vão em partes
+  // (documentos de no máximo 256 KB), o resto num documento "estado".
+  let nuvem = null;                 // coleção privada do usuário
+  let statusNuvem = 'conectando';   // conectando | ok | salvando | indisponivel | erro
+  let msgErroNuvem = '';
+  const salvoNaNuvem = {};          // id do documento -> JSON já gravado (evita regravar o que não mudou)
+  let partesNaNuvem = 0, tNuvem = null, gravando = false, deNovo = false;
+  const TAM_PARTE = 400;
+  const nomeParte = i => 'mov-' + String(i).padStart(3, '0');
+
+  function documentosDoEstado() {
+    const { movimentacoes, ...resto } = estado;
+    const docs = {};
+    let n = 0;
+    for (let i = 0; i < movimentacoes.length; i += TAM_PARTE, n++) docs[nomeParte(n)] = JSON.stringify(movimentacoes.slice(i, i + TAM_PARTE));
+    docs.estado = JSON.stringify({ ...resto, partes: n });
+    return { docs, n };
+  }
+
+  function agendarNuvem() {
+    if (!nuvem) return;
+    clearTimeout(tNuvem);
+    tNuvem = setTimeout(gravarNuvem, 700);
+  }
+
+  async function gravarNuvem() {
+    if (!nuvem) return;
+    if (gravando) { deNovo = true; return; }
+    gravando = true;
+    statusNuvem = 'salvando'; mostrarStatusNuvem();
+    try {
+      const { docs, n } = documentosDoEstado();
+      // partes primeiro, o índice ("estado") por último, depois apaga partes que sobraram
+      const ordem = Object.keys(docs).filter(k => k !== 'estado').concat('estado');
+      for (const k of ordem) {
+        if (salvoNaNuvem[k] === docs[k]) continue;
+        await nuvem.doc(k).set({ json: docs[k], salvoEm: new Date().toISOString() });
+        salvoNaNuvem[k] = docs[k];
+      }
+      for (let i = n; i < partesNaNuvem; i++) { await nuvem.doc(nomeParte(i)).delete(); delete salvoNaNuvem[nomeParte(i)]; }
+      partesNaNuvem = n;
+      statusNuvem = 'ok';
+    } catch (e) {
+      statusNuvem = 'erro';
+      msgErroNuvem = e && e.code === 'quota_exceeded' ? 'espaço da conta esgotado' : (e && (e.message || e.code)) || 'erro';
+    }
+    gravando = false;
+    mostrarStatusNuvem();
+    if (deNovo) { deNovo = false; gravarNuvem(); }
+  }
+
+  async function conectarNuvem() {
+    try {
+      if (!window.claude || typeof window.claude.use !== 'function') throw new Error('fora do claude.ai');
+      const [db, user] = await Promise.all([window.claude.use('db'), window.claude.use('user')]);
+      const uid = user ? await user.id() : null;
+      if (!db || !uid) throw new Error('indisponível');
+      const col = db.collection('data/users/' + uid);
+      const snap = await col.get();
+      const docs = {};
+      snap.docs.forEach(d => { if (d.exists) docs[d.id] = d.data(); });
+      nuvem = col;
+      Object.entries(docs).forEach(([k, v]) => { salvoNaNuvem[k] = v.json; });
+      let daNuvem = null;
+      if (docs.estado) {
+        const resto = JSON.parse(docs.estado.json);
+        partesNaNuvem = resto.partes || 0;
+        const movs = [];
+        for (let i = 0; i < partesNaNuvem; i++) if (docs[nomeParte(i)]) movs.push(...JSON.parse(docs[nomeParte(i)].json));
+        delete resto.partes;
+        daNuvem = valido({ ...resto, movimentacoes: movs });
+      }
+      const localTemDados = estado.movimentacoes.length || estado.contas.length || estado.lancamentos.length;
+      if (daNuvem && (!localTemDados || (daNuvem.atualizadoEm || '') >= (estado.atualizadoEm || ''))) {
+        estado = daNuvem;                                   // a conta é a fonte principal
+        if (!estado.entidades.some(e => e.id === filtroEnt)) filtroEnt = '';
+        try { localStorage.setItem(CHAVE, JSON.stringify(estado)); } catch (e) { /* ok */ }
+        statusNuvem = 'ok';
+        render();
+      } else if (localTemDados) {
+        statusNuvem = 'ok';
+        await gravarNuvem();                                // leva os dados deste navegador para a conta
+      } else statusNuvem = 'ok';
+    } catch (e) {
+      nuvem = null;
+      statusNuvem = 'indisponivel';
+    }
+    mostrarStatusNuvem();
+  }
+
+  function mostrarStatusNuvem() {
+    const el = document.getElementById('statusNuvem');
+    if (!el) return;
+    const txt = {
+      conectando: '☁ Conectando à sua conta…',
+      ok: '☁ Salvo na sua conta',
+      salvando: '☁ Salvando…',
+      indisponivel: '⚠ Salvo só neste navegador',
+      erro: '⚠ Não salvou na conta' + (msgErroNuvem ? ' (' + msgErroNuvem + ')' : '')
+    }[statusNuvem];
+    el.textContent = txt;
+    el.className = 'status-nuvem ' + statusNuvem;
+    el.title = statusNuvem === 'ok' ? 'Seus dados ficam numa área privada da sua conta e aparecem em qualquer aparelho.'
+      : statusNuvem === 'indisponivel' ? 'Abra o app pelo link do claude.ai para salvar na sua conta.' : '';
+  }
+
+  // ---------- Caixas de diálogo dentro da página (as do navegador podem estar bloqueadas) ----------
+  function perguntar(mensagem, { ok = 'OK', cancelar = 'Cancelar', campo = null } = {}) {
+    return new Promise(resolve => {
+      const fundo = document.createElement('div');
+      fundo.className = 'modal-fundo';
+      fundo.innerHTML = `<div class="modal" role="dialog" aria-modal="true"><p class="modal-msg"></p>` +
+        (campo !== null ? '<input class="modal-campo" inputmode="decimal">' : '') +
+        `<div class="acoes">${cancelar ? '<button type="button" class="secundario" data-r="0"></button>' : ''}<button type="button" data-r="1"></button></div></div>`;
+      fundo.querySelector('.modal-msg').textContent = mensagem;
+      fundo.querySelector('[data-r="1"]').textContent = ok;
+      if (cancelar) fundo.querySelector('[data-r="0"]').textContent = cancelar;
+      const inp = fundo.querySelector('.modal-campo');
+      if (inp) inp.value = campo;
+      const fechar = sim => {
+        fundo.remove();
+        document.removeEventListener('keydown', tecla, true);
+        resolve(inp ? (sim ? inp.value : null) : sim);
+      };
+      const tecla = e => {
+        if (e.key === 'Escape') { e.preventDefault(); fechar(false); }
+        if (e.key === 'Enter') { e.preventDefault(); fechar(true); }
+      };
+      fundo.addEventListener('click', e => {
+        const b = e.target.closest('[data-r]');
+        if (b) { e.stopPropagation(); fechar(b.dataset.r === '1'); }
+      });
+      document.addEventListener('keydown', tecla, true);
+      document.body.appendChild(fundo);
+      (inp || fundo.querySelector('[data-r="1"]')).focus();
+    });
+  }
+  const avisar = msg => perguntar(msg, { cancelar: null });
+
+  // Baixar um arquivo: pelo recurso de downloads do claude.ai quando disponível, senão pelo navegador
+  async function baixar(nome, conteudo, tipo) {
+    try {
+      const dl = window.claude && typeof window.claude.use === 'function' ? await window.claude.use('downloads') : null;
+      if (dl) { await dl.save({ filename: nome, data: new Blob([conteudo], { type: tipo }) }); return; }
+    } catch (e) {
+      if (e && e.code === 'declined') return;
+    }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([conteudo], { type: tipo }));
+    a.download = nome;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }
 
   // ---------- Utilidades ----------
@@ -178,7 +336,7 @@
   }
 
   // Descobre (ou cria) o titular e a conta a partir do cabeçalho do extrato
-  function contaAutomatica(info) {
+  async function contaAutomatica(info) {
     const titular = (info.titular || '').trim();
     const banco = info.banco || 'Banco';
     let ent = null;
@@ -187,10 +345,11 @@
       ent = estado.entidades.find(e => [e.nome, ...e.apelidos].some(a => normNome(a) === n));
       if (!ent && pareceEmpresa(titular)) {
         const nome = tituloCaso(titular);
-        const soc = confirm(`Encontrei a empresa "${titular}" no extrato.\n\nEla tem outros sócios além de você?\n\nOK = sim, é uma sociedade · Cancelar = é só minha`);
+        const soc = await perguntar(`Encontrei a empresa "${titular}" no extrato.\n\nEla tem outros sócios além de você?`,
+          { ok: 'Sim, tem sócios', cancelar: 'Não, é só minha' });
         let participacao = null;
         if (soc) {
-          const resp = prompt(`Qual é a sua participação na ${nome}, em %? (deixe em branco se não souber agora)`, '');
+          const resp = await perguntar(`Qual é a sua participação na ${nome}, em %? (deixe em branco se não souber agora)`, { campo: '', ok: 'Salvar' });
           const v = Number(String(resp || '').replace(',', '.').replace('%', ''));
           participacao = resp && Number.isFinite(v) && v > 0 && v <= 100 ? v : null;
         }
@@ -220,7 +379,7 @@
       throw new Error('Este arquivo não diz de quem é a conta. Escolha a conta na lista “Conta” e importe de novo.');
     }
     let contaNova = false;
-    if (!conta) { const n = estado.contas.length; conta = contaAutomatica(r.info || {}); contaNova = estado.contas.length > n; }
+    if (!conta) { const n = estado.contas.length; conta = await contaAutomatica(r.info || {}); contaNova = estado.contas.length > n; }
     contaId = conta.id;
     const nomes = nomesProprios();
 
@@ -262,16 +421,16 @@
       msgSaldo = ` Saldo: ${brl.format(r.saldo)}.`;
     } else if (r.saldo !== null) {
       if (Math.abs(r.saldo - conta.saldo) >= 0.01 &&
-          confirm(`O banco informou saldo de ${brl.format(r.saldo)}${r.dataSaldo ? ' em ' + dataBR(r.dataSaldo) : ''}.\n` +
-                  `O saldo cadastrado de "${conta.nome}" é ${brl.format(conta.saldo)}.\n\nAtualizar para o saldo do banco?`)) {
+          await perguntar(`O banco informou saldo de ${brl.format(r.saldo)}${r.dataSaldo ? ' em ' + dataBR(r.dataSaldo) : ''}.\n` +
+                  `O saldo cadastrado de "${conta.nome}" é ${brl.format(conta.saldo)}.\n\nAtualizar para o saldo do banco?`, { ok: 'Atualizar', cancelar: 'Manter' })) {
         conta.saldo = r.saldo;
         msgSaldo = ` Saldo atualizado para ${brl.format(r.saldo)}.`;
       }
     } else if (novas.length) {
       const total = arred(novas.reduce((s, m) => s + m.valor, 0));
-      if (confirm(`${novas.length === 1 ? "A movimentação nova soma" : `As ${novas.length} movimentações novas somam`} ${brl.format(total)}.\n\n` +
+      if (await perguntar(`${novas.length === 1 ? "A movimentação nova soma" : `As ${novas.length} movimentações novas somam`} ${brl.format(total)}.\n\n` +
                   `Aplicar esse valor ao saldo de "${conta.nome}" (${brl.format(conta.saldo)} → ${brl.format(arred(conta.saldo + total))})?\n\n` +
-                  'Responda "Cancelar" se o saldo cadastrado já considera essas movimentações.')) {
+                  'Escolha "Manter" se o saldo cadastrado já considera essas movimentações.', { ok: 'Aplicar', cancelar: 'Manter' })) {
         conta.saldo = arred(conta.saldo + total);
         msgSaldo = ` Saldo atualizado para ${brl.format(conta.saldo)}.`;
       }
@@ -731,12 +890,8 @@
         m.valor.toFixed(2).replace('.', ',')]);
     }
     const csv = '﻿' + linhas.map(l => l.map(v => /[;"\n]/.test(v) ? `"${String(v).replace(/"/g, '""')}"` : v).join(';')).join('\r\n');
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
     const nome = normNome(document.getElementById('fBusca').value).replace(/ /g, '-');
-    a.download = `extrato${nome ? '-' + nome : ''}-${hoje()}.csv`;
-    a.click();
-    URL.revokeObjectURL(a.href);
+    baixar(`extrato${nome ? '-' + nome : ''}-${hoje()}.csv`, csv, 'text/csv;charset=utf-8');
   }
 
   // ---------- Formulários ----------
@@ -848,7 +1003,7 @@
   });
 
   // ---------- Cliques (delegação) ----------
-  document.addEventListener('click', e => {
+  document.addEventListener('click', async e => {
     const b = e.target.closest('button');
     if (!b) return;
     const d = b.dataset;
@@ -864,7 +1019,7 @@
       const msg = conta
         ? `Confirmar "${l.descricao}" (${brl.format(l.valor)})? O saldo de ${conta.nome} será atualizado.`
         : `Confirmar "${l.descricao}" (${brl.format(l.valor)})? Nenhuma conta vinculada — saldo não será alterado.`;
-      if (confirm(msg)) marcarPago(d.pagar);
+      if (await perguntar(msg)) marcarPago(d.pagar);
       return;
     }
     if (d.desfazer) { desfazerPago(d.desfazer); return; }
@@ -876,7 +1031,7 @@
     }
     if (d.excluirMov) {
       const m = estado.movimentacoes.find(x => x.id === d.excluirMov);
-      if (m && confirm(`Excluir a movimentação "${m.descricao}"? (O saldo da conta não será alterado.)`)) {
+      if (m && await perguntar(`Excluir a movimentação "${m.descricao}"? (O saldo da conta não será alterado.)`)) {
         if (m.lancId) {
           const l = estado.lancamentos.find(x => x.id === m.lancId);
           if (l) l.movId = null;
@@ -900,7 +1055,7 @@
     }
     if (d.excluirLanc) {
       const l = estado.lancamentos.find(x => x.id === d.excluirLanc);
-      if (l && confirm(`Excluir "${l.descricao}"?${l.pago ? ' (O saldo da conta não será alterado.)' : ''}`)) {
+      if (l && await perguntar(`Excluir "${l.descricao}"?${l.pago ? ' (O saldo da conta não será alterado.)' : ''}`)) {
         estado.lancamentos = estado.lancamentos.filter(x => x.id !== l.id);
         salvar();
       }
@@ -927,8 +1082,8 @@
     }
     if (d.excluirEnt) {
       const en = entidade(d.excluirEnt);
-      if (estado.contas.some(c => c.entidadeId === en.id)) { alert(`"${en.nome}" ainda tem contas. Mude ou exclua as contas antes.`); return; }
-      if (confirm(`Excluir o titular "${en.nome}"?`)) {
+      if (estado.contas.some(c => c.entidadeId === en.id)) { avisar(`"${en.nome}" ainda tem contas. Mude ou exclua as contas antes.`); return; }
+      if (await perguntar(`Excluir o titular "${en.nome}"?`)) {
         estado.entidades = estado.entidades.filter(x => x.id !== en.id);
         if (filtroEnt === en.id) filtroEnt = '';
         salvar();
@@ -937,7 +1092,7 @@
     }
     if (d.excluirConta) {
       const c = estado.contas.find(x => x.id === d.excluirConta);
-      if (c && confirm(`Excluir a conta "${c.nome}"? Os lançamentos vinculados ficarão sem conta e as movimentações importadas dela serão apagadas.`)) {
+      if (c && await perguntar(`Excluir a conta "${c.nome}"? Os lançamentos vinculados ficarão sem conta e as movimentações importadas dela serão apagadas.`)) {
         estado.contas = estado.contas.filter(x => x.id !== c.id);
         estado.movimentacoes = estado.movimentacoes.filter(m => m.contaId !== c.id);
         estado.lancamentos.forEach(l => { if (l.contaId === c.id) l.contaId = ''; });
@@ -953,30 +1108,32 @@
 
   // ---------- Dados ----------
   document.getElementById('exportar').addEventListener('click', () => {
-    const blob = new Blob([JSON.stringify(estado, null, 2)], { type: 'application/json' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `panorama-financeiro-${hoje()}.json`;
-    a.click();
-    URL.revokeObjectURL(a.href);
+    baixar(`panorama-financeiro-${hoje()}.json`, JSON.stringify(estado), 'application/json');
   });
 
-  document.getElementById('importar').addEventListener('change', e => {
+  document.getElementById('importar').addEventListener('change', async e => {
     const arq = e.target.files[0];
     if (!arq) return;
-    arq.text().then(txt => {
-      const dados = valido(JSON.parse(txt));
-      if (!dados) throw new Error('formato');
-      if (confirm('Substituir todos os dados atuais pelos do arquivo?')) { estado = dados; filtroEnt = ''; salvar(); }
-    }).catch(() => alert('Arquivo inválido.')).finally(() => { e.target.value = ''; });
+    let dados = null;
+    try { dados = valido(JSON.parse(await arq.text())); } catch (err) { dados = null; }
+    e.target.value = '';
+    if (!dados) { avisar('Este arquivo não é um backup do Panorama Financeiro.'); return; }
+    const temDados = estado.movimentacoes.length || estado.contas.length || estado.lancamentos.length;
+    if (temDados && !(await perguntar('Substituir todos os dados atuais pelos do backup?', { ok: 'Substituir' }))) return;
+    estado = dados; filtroEnt = '';
+    salvar();
+    const st = document.getElementById('statusImport');
+    st.hidden = false; st.className = 'status ok';
+    st.innerHTML = `<strong>Backup carregado:</strong> ${dados.contas.length} conta(s) e ${dados.movimentacoes.length} movimentação(ões). ` +
+      'Veja em <button type="button" class="link" data-aba-ir="painel">Painel</button> e <button type="button" class="link" data-aba-ir="extrato">Extrato</button>.';
   });
 
-  document.getElementById('limpar').addEventListener('click', () => {
-    if (confirm('Apagar TODOS os dados? Isso não pode ser desfeito.')) { estado = vazio(); filtroEnt = ''; salvar(); }
+  document.getElementById('limpar').addEventListener('click', async () => {
+    if (await perguntar('Apagar TODOS os dados? Isso não pode ser desfeito.', { ok: 'Apagar tudo' })) { estado = vazio(); filtroEnt = ''; salvar(); }
   });
 
-  document.getElementById('exemplo').addEventListener('click', () => {
-    if ((estado.contas.length || estado.lancamentos.length) && !confirm('Isso vai substituir seus dados atuais. Continuar?')) return;
+  document.getElementById('exemplo').addEventListener('click', async () => {
+    if ((estado.contas.length || estado.lancamentos.length) && !(await perguntar('Isso vai substituir seus dados atuais. Continuar?'))) return;
     const mes = hoje().slice(0, 7);
     const dia = n => `${mes}-${String(n).padStart(2, '0')}`;
     const c1 = id(), c2 = id(), c3 = id();
@@ -1016,7 +1173,7 @@
     const li = e.target.closest('li[data-fornecedor]');
     if (li) filtrarFornecedor(li.dataset.fornecedor);
   });
-  document.getElementById('tabelaExtrato').addEventListener('change', e => {
+  document.getElementById('tabelaExtrato').addEventListener('change', async e => {
     const inp = e.target.closest('.cat-mov');
     if (!inp) return;
     const m = estado.movimentacoes.find(x => x.id === inp.dataset.mov);
@@ -1025,7 +1182,7 @@
     const iguais = estado.movimentacoes.filter(x => x.id !== m.id && x.descricao === m.descricao && x.categoria !== nova);
     m.categoria = nova;
     m.categoriaManual = true;
-    if (iguais.length && confirm(`Aplicar a categoria "${nova}" também às outras ${iguais.length} movimentação(ões) "${m.descricao}"?`)) {
+    if (iguais.length && await perguntar(`Aplicar a categoria "${nova}" também às outras ${iguais.length} movimentação(ões) "${m.descricao}"?`)) {
       iguais.forEach(x => { x.categoria = nova; x.categoriaManual = true; });
     }
     salvar();
@@ -1078,4 +1235,6 @@
   });
 
   render();
+  mostrarStatusNuvem();
+  conectarNuvem();
 })();

@@ -10,7 +10,10 @@
   <header class="topo">
     <div class="topo-linha">
       <h1>Panorama Financeiro</h1>
-      <label class="ver">Ver <select id="filtroEntidade" aria-label="Titular"></select></label>
+      <div class="topo-dir">
+        <span id="statusNuvem" class="status-nuvem" aria-live="polite"></span>
+        <label class="ver">Ver <select id="filtroEntidade" aria-label="Titular"></select></label>
+      </div>
     </div>
     <nav class="abas" role="tablist">
       <button class="aba ativa" data-aba="painel">Painel</button>
@@ -24,7 +27,7 @@
   <main>
     <div id="semDados" class="painel-bloco aviso" hidden>
       <h2>Seus extratos ainda não estão neste aplicativo</h2>
-      <p>Os dados ficam guardados só neste navegador. Para começar, importe os extratos dos seus bancos (pode escolher
+      <p>Para começar, importe os extratos dos seus bancos (pode escolher
         <strong>vários PDFs de uma vez</strong>) ou carregue um arquivo de backup.</p>
       <div class="acoes">
         <button type="button" data-abrir-import>Importar extratos (PDF, OFX ou CSV)</button>
@@ -255,7 +258,7 @@
     <section id="dados" class="secao">
       <div class="painel-bloco">
         <h2>Backup dos seus dados</h2>
-        <p>Os dados ficam salvos apenas neste navegador. Exporte um backup de vez em quando.</p>
+        <p>Os dados ficam numa área privada da sua conta do claude.ai (só você vê) e aparecem em qualquer aparelho em que você abrir o app. Exporte um backup de vez em quando.</p>
         <div class="acoes">
           <button id="exportar">Exportar (JSON)</button>
           <label class="botao secundario">Importar <input type="file" id="importar" accept="application/json" hidden></label>
